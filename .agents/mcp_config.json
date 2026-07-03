@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "kis-code-assistant-mcp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "kis-code-assistant-mcp",
+        "run",
+        "server.py",
+        "--stdio"
+      ]
+    }
+  }
+}

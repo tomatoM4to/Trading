@@ -8,4 +8,18 @@ wheels/
 
 # Virtual environments
 .venv
-*.png
+
+# IDE
+.idea
+.vscode
+
+# Logs
+*.log
+*_log/
+*_logs/
+tmp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
