@@ -97,7 +97,8 @@ def get_kosdaq_master_dataframe(base_dir):
 
     return df
 
-kosdaq_master_download(base_dir)
-df = get_kosdaq_master_dataframe(base_dir)
+if __name__ == "__main__":
+    kosdaq_master_download(base_dir)
+    df = get_kosdaq_master_dataframe(base_dir)
 
-df.to_csv('kosdaq_code.xlsx',index=False)  # 현재 위치에 엑셀파일로 저장
+    df.to_csv('kosdaq_code.xlsx',index=False)  # 현재 위치에 엑셀파일로 저장

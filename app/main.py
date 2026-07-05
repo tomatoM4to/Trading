@@ -14,12 +14,16 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Application starting up...")
 
+    from tasks.init_stock_codes import init_stock_codes_db
     # DB 연결성 확인 및 초기화
     try:
         init_sqlite_connection()
         logger.info("Database connection validated")
+
+        # 종목 리스트 초기화 (KOSPI, KOSDAQ 마스터 파일 다운로드 및 DB 저장)
+        init_stock_codes_db()
     except Exception as e:
-        logger.error("Failed to connect to the database: %s", e)
+        logger.error("Failed to connect to the database or initialize stock codes: %s", e)
         raise e
 
     auth_scheduler = AuthScheduler()

@@ -29,6 +29,23 @@
 - **데이터베이스 연동 (Database)**:
   - SQLite를 기본 데이터베이스로 사용하며, 동시성 관리를 위해 WAL(Write-Ahead Logging) 저널 모드를 적용함.
   - 앱 시작 시점(`lifespan`)에 `init_sqlite_connection()`을 호출하여 DB 연결성을 사전에 검증함.
+- **종목 유니버스 초기화 (Stock Universe Initialization)**:
+  - 앱 기동 시 KIS 공식 스크립트를 통해 코스피/코스닥 마스터 파일을 다운로드 및 파싱함.
+  - **데이터 정제**: 파생상품(ETF/ETN), 리츠, SPAC, 우선주 및 거래불가 종목(거래정지, 관리종목) 등을 완벽히 제거하여 '순수 매매용 보통주'만 남김.
+  - **보존 및 적재**: 정량적 데이터(거래량, 시가총액 등)는 추후 쿼리 기반 동적 필터링을 위해 유지하며, CSV 백업(`app/data/`) 후 SQLite의 `stock_codes` 테이블로 덮어쓰기 저장함.
+  - **테이블 스키마 (`stock_codes`)**:
+
+    | 컬럼명 | 데이터/타입 | 설명 |
+    |---|---|---|
+    | `ticker` | 문자열 | 단축코드 (KIS API 주문/조회용) |
+    | `name` | 문자열 | 종목명 (한글명) |
+    | `market` | 문자열 | KOSPI / KOSDAQ |
+    | `prev_vol` | 숫자형 | 전일거래량 |
+    | `market_cap` | 숫자형 | 전일기준 시가총액 (단위: 억) |
+    | `total_shares` | 숫자형 | 상장주수 (단위: 천 주) |
+    | `capital` | 숫자형 | 자본금 |
+    | `credit_able` | 문자열 | 신용주문 가능 여부 |
+    | `margin_rate` | 숫자형 | 증거금비율 |
 - **설정 파일 (Configuration)**:
   - `kis_devlp.yaml`: KIS API 앱키, 앱시크릿, 계좌번호 및 실전투자 통신 엔드포인트 URL(`prod`)을 관리.
 - **MCP(Model Context Protocol) 연동**:
