@@ -7,5 +7,6 @@ requires-python = ">=3.12"
 dependencies = [
     "apscheduler>=3.11.3",
     "fastapi[standard]>=0.138.1",
+    "pandas>=3.0.3",
     "requests>=2.34.2",
 ]
