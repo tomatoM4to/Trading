@@ -26,6 +26,9 @@
 - **글로벌 로깅 설정 (Global Logging)**:
   - `core.logging`을 통해 프로젝트 전역에 Rich 기반의 일관된 로거를 적용.
   - 진입점인 `app/main.py` 시작 시 `setup_logging()`을 호출하여 모든 하위 모듈이 동일한 로깅 규칙을 따르도록 관리함.
+- **데이터베이스 연동 (Database)**:
+  - SQLite를 기본 데이터베이스로 사용하며, 동시성 관리를 위해 WAL(Write-Ahead Logging) 저널 모드를 적용함.
+  - 앱 시작 시점(`lifespan`)에 `init_sqlite_connection()`을 호출하여 DB 연결성을 사전에 검증함.
 - **설정 파일 (Configuration)**:
   - `kis_devlp.yaml`: KIS API 앱키, 앱시크릿, 계좌번호 및 실전투자 통신 엔드포인트 URL(`prod`)을 관리.
 - **MCP(Model Context Protocol) 연동**:

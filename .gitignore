@@ -12,3 +12,5 @@ wheels/
 
 kis_devlp.yaml
 KIS20*
+
+*.db

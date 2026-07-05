@@ -2,6 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from core.database import init_sqlite_connection
 from core.logging import setup_logging
 from fastapi import FastAPI
 from tasks.auth_scheduler import AuthScheduler
@@ -12,6 +13,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Application starting up...")
+
+    # DB 연결성 확인 및 초기화
+    try:
+        init_sqlite_connection()
+        logger.info("Database connection validated")
+    except Exception as e:
+        logger.error("Failed to connect to the database: %s", e)
+        raise e
+
     auth_scheduler = AuthScheduler()
     auth_scheduler.start()
 
