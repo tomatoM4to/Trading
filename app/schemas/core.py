@@ -88,8 +88,4 @@ class KisConfig(BaseModel):
             my_url_ws=self.ws_url(),
         )
 
-
-class KisTrId(StrEnum):
-    """KIS TR ID 모음"""
-
-    VOLUME_RANK = "FHPST01710000"
+

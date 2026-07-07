@@ -6,6 +6,7 @@ from core.database import init_sqlite_connection
 from core.logging import setup_logging
 from fastapi import FastAPI
 from tasks.auth_scheduler import AuthScheduler
+from core.kis_fetch import start_q_worker, stop_q_worker
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -29,10 +30,14 @@ async def lifespan(app: FastAPI):
     auth_scheduler = AuthScheduler()
     auth_scheduler.start()
 
+    # KIS API Rate Limit 제어 워커 백그라운드 구동
+    await start_q_worker()
+
     yield  # Application runs here
 
     # Shutdown code
     logger.info("Application shutting down...")
+    await stop_q_worker()
     auth_scheduler.stop()
 
 
@@ -41,6 +46,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from routes import market
+app.include_router(market.router)
 
 @app.get("/")
 def read_root():

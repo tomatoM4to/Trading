@@ -46,6 +46,14 @@
     | `capital` | 숫자형 | 자본금 |
     | `credit_able` | 문자열 | 신용주문 가능 여부 |
     | `margin_rate` | 숫자형 | 증거금비율 |
+- **비동기 API 큐 (Rate Limit 제어)**:
+  - KIS API의 초당 20건 통신 제한을 방어하기 위해 `kis_fetch.py`에 구현된 우선순위 큐(PriorityQueue) 기반의 워커를 사용함.
+  - 앱 시작(`lifespan`) 시 `start_q_worker()`를 구동하고, 종료 시 `stop_q_worker()`로 안전하게 종료함.
+- **API 응답 데이터 처리 (APIResp & DotDict)**:
+  - 통신 결과는 `APIResp` 클래스로 래핑되며, 내부적으로 `DotDict`를 사용하여 중첩된 JSON 구조를 객체 속성(`body.output2[0].stck_clpr` 등)처럼 직관적으로 접근하도록 지원함.
+  - Pandas DataFrame 변환에 최적화된 순수 `dict` 기반 구조를 채택함.
+- **라우팅 및 TR_ID 관리 (Routing & TR_ID)**:
+  - 각 KIS API의 엔드포인트 URL과 TR_ID는 전역 스키마(Enum)에 의존하지 않으며, 결합도를 낮추기 위해 `app/routes/` 하위의 개별 라우터 함수 내부에 지역 변수로 명시하여 관리함.
 - **설정 파일 (Configuration)**:
   - `kis_devlp.yaml`: KIS API 앱키, 앱시크릿, 계좌번호 및 실전투자 통신 엔드포인트 URL(`prod`)을 관리.
 - **MCP(Model Context Protocol) 연동**:
@@ -54,7 +62,7 @@
 ## 3. 기술 스택 (Tech Stack)
 - **언어**: Python >= 3.12
 - **프레임워크**: FastAPI
-- **주요 라이브러리**: `apscheduler`, `requests`, `uvicorn` 등
+- **주요 라이브러리**: `apscheduler`, `requests`, `pandas`, `uvicorn` 등
 - **버전 관리 및 의존성**: `pyproject.toml`, `uv.lock`
 
 ## 4. 실행 방법 (Run & Debug)
