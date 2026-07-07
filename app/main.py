@@ -46,8 +46,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from routes import market
+from routes import market, admin
 app.include_router(market.router)
+app.include_router(admin.router)
 
 @app.get("/")
 def read_root():

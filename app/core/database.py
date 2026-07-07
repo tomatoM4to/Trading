@@ -28,9 +28,44 @@ def connect_sqlite() -> sqlite3.Connection:
 
 
 def init_sqlite_connection() -> None:
-    """Validate SQLite connectivity at startup without creating schema."""
+    """Validate SQLite connectivity at startup and create schema."""
     conn = connect_sqlite()
-    conn.close()
+    try:
+        # daily_ohlcv 테이블 생성
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS daily_ohlcv (
+            ticker TEXT NOT NULL,
+            date TEXT NOT NULL,
+            open INTEGER NOT NULL,
+            high INTEGER NOT NULL,
+            low INTEGER NOT NULL,
+            close INTEGER NOT NULL,
+            volume INTEGER NOT NULL,
+            PRIMARY KEY (ticker, date)
+        )
+        ''')
+        # 시계열 조회를 위한 인덱스 생성
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_date ON daily_ohlcv(date)')
+        
+        # minute_ohlcv 테이블 생성 (추후 분봉 적재 스케줄러 용)
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS minute_ohlcv (
+            ticker TEXT NOT NULL,
+            time TEXT NOT NULL,
+            open INTEGER NOT NULL,
+            high INTEGER NOT NULL,
+            low INTEGER NOT NULL,
+            close INTEGER NOT NULL,
+            volume INTEGER NOT NULL,
+            PRIMARY KEY (ticker, time)
+        )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_time ON minute_ohlcv(time)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_ticker_time ON minute_ohlcv(ticker, time)')
+        
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_db() -> Generator[sqlite3.Connection, None, None]:
