@@ -46,23 +46,25 @@ def init_sqlite_connection() -> None:
         ''')
         # 시계열 조회를 위한 인덱스 생성
         conn.execute('CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_date ON daily_ohlcv(date)')
-        
-        # minute_ohlcv 테이블 생성 (추후 분봉 적재 스케줄러 용)
+
+        # minute_ohlcv 테이블 (추후 분봉 적재 스케줄러 용)
         conn.execute('''
         CREATE TABLE IF NOT EXISTS minute_ohlcv (
             ticker TEXT NOT NULL,
+            date TEXT NOT NULL,
             time TEXT NOT NULL,
             open INTEGER NOT NULL,
             high INTEGER NOT NULL,
             low INTEGER NOT NULL,
             close INTEGER NOT NULL,
             volume INTEGER NOT NULL,
-            PRIMARY KEY (ticker, time)
+            amount REAL,
+            PRIMARY KEY (ticker, date, time)
         )
         ''')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_time ON minute_ohlcv(time)')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_ticker_time ON minute_ohlcv(ticker, time)')
-        
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_date_time ON minute_ohlcv(date, time)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_ticker_date_time ON minute_ohlcv(ticker, date, time)')
+
         conn.commit()
     finally:
         conn.close()

@@ -152,8 +152,8 @@ async def start_q_worker():
                 finally:
                     _kis_queue.task_done()
 
-                # 초당 20건 제한 완충 버퍼 대기
-                await asyncio.sleep(0.05)
+                # 2026.04 KIS 공식 가이드 반영: 동시 호출 시 100ms ~ 150ms 텀 권장
+                await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
                 logger.info("[KIS Async Worker] Worker task cancelled.")
