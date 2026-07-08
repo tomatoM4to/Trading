@@ -3,19 +3,22 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from core.database import init_sqlite_connection
+from core.kis_fetch import start_q_worker, stop_q_worker
 from core.logging import setup_logging
 from fastapi import FastAPI
+from routes import admin, market
 from tasks.auth_scheduler import AuthScheduler
-from core.kis_fetch import start_q_worker, stop_q_worker
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Application starting up...")
 
     from tasks.init_stock_codes import init_stock_codes_db
+
     # DB 연결성 확인 및 초기화
     try:
         init_sqlite_connection()
@@ -24,7 +27,9 @@ async def lifespan(app: FastAPI):
         # 종목 리스트 초기화 (KOSPI, KOSDAQ 마스터 파일 다운로드 및 DB 저장)
         init_stock_codes_db()
     except Exception as e:
-        logger.error("Failed to connect to the database or initialize stock codes: %s", e)
+        logger.error(
+            "Failed to connect to the database or initialize stock codes: %s", e
+        )
         raise e
 
     auth_scheduler = AuthScheduler()
@@ -46,9 +51,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from routes import market, admin
 app.include_router(market.router)
 app.include_router(admin.router)
+
 
 @app.get("/")
 def read_root():

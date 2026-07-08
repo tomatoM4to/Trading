@@ -1,8 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-import pandas as pd
 
+import pandas as pd
 from core.database import connect_sqlite
 from core.kis_fetch import async_kis_fetch
 
@@ -12,17 +12,20 @@ logger.setLevel(logging.INFO)
 API_URL = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 TR_ID = "FHKST03010100"  # 국내주식기간별시세
 
-async def fetch_and_save_ohlcv(ticker: str, end_date: datetime, days_to_subtract: int) -> list[dict]:
+
+async def fetch_and_save_ohlcv(
+    ticker: str, end_date: datetime, days_to_subtract: int
+) -> list[dict]:
     """특정 종목의 OHLCV 데이터를 KIS API로 조회하여 리스트로 반환"""
     start_date = end_date - timedelta(days=days_to_subtract)
 
     params = {
-        "FID_COND_MRKT_DIV_CODE": "J",       # J: 주식, ETF, ETN
-        "FID_INPUT_ISCD": ticker,            # 종목코드
+        "FID_COND_MRKT_DIV_CODE": "J",  # J: 주식, ETF, ETN
+        "FID_INPUT_ISCD": ticker,  # 종목코드
         "FID_INPUT_DATE_1": start_date.strftime("%Y%m%d"),  # 조회 시작일자
-        "FID_INPUT_DATE_2": end_date.strftime("%Y%m%d"),    # 조회 종료일자
-        "FID_PERIOD_DIV_CODE": "D",          # D: 일봉
-        "FID_ORG_ADJ_PRC": "0"               # 0: 수정주가
+        "FID_INPUT_DATE_2": end_date.strftime("%Y%m%d"),  # 조회 종료일자
+        "FID_PERIOD_DIV_CODE": "D",  # D: 일봉
+        "FID_ORG_ADJ_PRC": "0",  # 0: 수정주가
     }
 
     resp = await async_kis_fetch(
@@ -30,13 +33,14 @@ async def fetch_and_save_ohlcv(ticker: str, end_date: datetime, days_to_subtract
         ptr_id=TR_ID,
         tr_cont="",
         params=params,
-        priority=7  # 스케줄러 태스크는 실시간 요청보다 약간 낮은 우선순위 할당
+        priority=7,  # 스케줄러 태스크는 실시간 요청보다 약간 낮은 우선순위 할당
     )
 
     if resp.is_ok():
         return resp.get_body().output2
 
     raise Exception(f"API Error: {resp.get_error_message()}")
+
 
 async def process_ticker(ticker: str, target_api_calls: int = 5):
     """
@@ -78,15 +82,17 @@ async def process_ticker(ticker: str, target_api_calls: int = 5):
     # 데이터 정리
     processed_data = []
     for item in all_data:
-        processed_data.append({
-            "ticker": ticker,
-            "date": item.stck_bsop_date,
-            "open": int(item.stck_oprc),
-            "high": int(item.stck_hgpr),
-            "low": int(item.stck_lwpr),
-            "close": int(item.stck_clpr),
-            "volume": int(item.acml_vol)
-        })
+        processed_data.append(
+            {
+                "ticker": ticker,
+                "date": item.stck_bsop_date,
+                "open": int(item.stck_oprc),
+                "high": int(item.stck_hgpr),
+                "low": int(item.stck_lwpr),
+                "close": int(item.stck_clpr),
+                "volume": int(item.acml_vol),
+            }
+        )
 
     if not processed_data:
         logger.info(f"[{ticker}] No valid OHLCV data found. Skipping.")
@@ -97,13 +103,16 @@ async def process_ticker(ticker: str, target_api_calls: int = 5):
     try:
         df = pd.DataFrame(processed_data)
         # 중복 제거 (혹시 겹치는 날짜가 있을 경우)
-        df.drop_duplicates(subset=['ticker', 'date'], inplace=True)
+        df.drop_duplicates(subset=["ticker", "date"], inplace=True)
 
         cursor = conn.cursor()
-        cursor.executemany('''
+        cursor.executemany(
+            """
             INSERT OR REPLACE INTO daily_ohlcv (ticker, date, open, high, low, close, volume)
             VALUES (:ticker, :date, :open, :high, :low, :close, :volume)
-        ''', df.to_dict('records'))
+        """,
+            df.to_dict("records"),
+        )
         conn.commit()
         return True
     except Exception as e:
@@ -111,6 +120,7 @@ async def process_ticker(ticker: str, target_api_calls: int = 5):
         raise e
     finally:
         conn.close()
+
 
 async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
     """
@@ -124,7 +134,7 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
         # 시장에 해당하는 종목 코드 조회
         cursor = conn.cursor()
         cursor.execute("SELECT ticker FROM stock_codes WHERE market = ?", (market,))
-        tickers = [row['ticker'] for row in cursor.fetchall()]
+        tickers = [row["ticker"] for row in cursor.fetchall()]
     except Exception as e:
         logger.error(f"Failed to fetch tickers from DB: {e}")
         return
@@ -156,7 +166,9 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
                 await process_ticker(ticker)
                 success_count += 1
                 if success_count % 100 == 0:
-                    logger.info(f"[Progress] Successfully saved {success_count} tickers so far...")
+                    logger.info(
+                        f"[Progress] Successfully saved {success_count} tickers so far..."
+                    )
             except Exception as e:
                 if requeue_count < 5:
                     # logger.warning(f"[{ticker}] Fetch failed ({e}). Requeueing ({requeue_count + 1}/5)...")
@@ -189,7 +201,9 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
     logger.info(f"Elapsed Time: {elapsed_time}")
     logger.info("=====================================================")
 
+
 _running_scheduler_task: asyncio.Task | None = None
+
 
 async def start_scheduler_task(market: str = "KOSPI"):
     """임시 라우터에서 백그라운드 태스크로 스케줄러를 구동할 때 사용"""
@@ -202,6 +216,7 @@ async def start_scheduler_task(market: str = "KOSPI"):
     _running_scheduler_task = loop.create_task(run_daily_ohlcv_scheduler(market))
     logger.info("Scheduler task started manually via admin route.")
     return True
+
 
 def stop_scheduler_task():
     """임시 라우터에서 구동 중인 스케줄러를 강제 취소"""

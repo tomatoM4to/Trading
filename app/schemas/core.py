@@ -1,4 +1,3 @@
-from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel
@@ -52,7 +51,9 @@ class KisConfig(BaseModel):
         return value
 
     def app_credentials(self) -> tuple[str, str]:
-        return self._require("my_app", self.my_app), self._require("my_sec", self.my_sec)
+        return self._require("my_app", self.my_app), self._require(
+            "my_sec", self.my_sec
+        )
 
     def select_account(self, product: ProductCode) -> str:
         account_by_product = {
@@ -63,9 +64,7 @@ class KisConfig(BaseModel):
             "29": self.my_acct_stock,
         }
         my_acct = account_by_product.get(product)
-        return self._require(
-            f"account for product={product}", my_acct
-        )
+        return self._require(f"account for product={product}", my_acct)
 
     def api_url(self) -> str:
         return self._require("prod", self.prod)
@@ -73,9 +72,7 @@ class KisConfig(BaseModel):
     def ws_url(self) -> str:
         return self.ops or ""
 
-    def to_environment(
-        self, product: ProductCode, token_key: str
-    ) -> KisEnvironment:
+    def to_environment(self, product: ProductCode, token_key: str) -> KisEnvironment:
         my_app, my_sec = self.app_credentials()
         return KisEnvironment(
             my_app=my_app,
@@ -87,5 +84,3 @@ class KisConfig(BaseModel):
             my_url=self.api_url(),
             my_url_ws=self.ws_url(),
         )
-
-

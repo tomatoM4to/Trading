@@ -1,10 +1,14 @@
 from fastapi import APIRouter, HTTPException
 from tasks.daily_ohlcv_scheduler import start_scheduler_task, stop_scheduler_task
-from tasks.minute_ohlcv_scheduler import start_minute_scheduler_task, stop_minute_scheduler_task
+from tasks.minute_ohlcv_scheduler import (
+    start_minute_scheduler_task,
+    stop_minute_scheduler_task,
+)
 
 router = APIRouter()
 daily_router = APIRouter(prefix="/admin/daily", tags=["Admin (Daily OHLCV)"])
 minute_router = APIRouter(prefix="/admin/minute", tags=["Admin (Minute OHLCV)"])
+
 
 @daily_router.post("/start")
 async def trigger_daily_ohlcv(market: str = "KOSPI"):
@@ -17,6 +21,7 @@ async def trigger_daily_ohlcv(market: str = "KOSPI"):
     else:
         raise HTTPException(status_code=400, detail="Scheduler is already running.")
 
+
 @daily_router.post("/stop")
 async def cancel_daily_ohlcv():
     """
@@ -28,6 +33,7 @@ async def cancel_daily_ohlcv():
     else:
         return {"message": "No running scheduler found to stop."}
 
+
 @minute_router.post("/start")
 async def trigger_minute_ohlcv(market: str = "KOSPI"):
     """
@@ -37,7 +43,10 @@ async def trigger_minute_ohlcv(market: str = "KOSPI"):
     if started:
         return {"message": f"Successfully started minute OHLCV scheduler for {market}."}
     else:
-        raise HTTPException(status_code=400, detail="Minute scheduler is already running.")
+        raise HTTPException(
+            status_code=400, detail="Minute scheduler is already running."
+        )
+
 
 @minute_router.post("/stop")
 async def cancel_minute_ohlcv():
@@ -49,6 +58,7 @@ async def cancel_minute_ohlcv():
         return {"message": "Successfully stopped the running minute scheduler."}
     else:
         return {"message": "No running minute scheduler found to stop."}
+
 
 @daily_router.get("/check")
 def check_daily_ohlcv(market: str = "KOSPI"):
@@ -99,12 +109,15 @@ def check_daily_ohlcv(market: str = "KOSPI"):
         deep_history_count = cursor.fetchone()[0]
 
         # 4. 전체 캔들 수
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*)
             FROM daily_ohlcv d
             JOIN stock_codes s ON d.ticker = s.ticker
             WHERE s.market = ?
-        """, (market,))
+        """,
+            (market,),
+        )
         total_rows = cursor.fetchone()[0]
 
         status = "No Data"
@@ -112,13 +125,13 @@ def check_daily_ohlcv(market: str = "KOSPI"):
         is_deep_enough = False
 
         if distribution and target_total_tickers > 0:
-            most_recent_count = distribution[0]['ticker_count']
+            most_recent_count = distribution[0]["ticker_count"]
 
             # 일봉 스케줄러의 특징 및 종목 필터링(거래정지 제외) 특성상 최신 날짜 보유 비율 100%를 요구
-            is_up_to_date = (most_recent_count == target_total_tickers)
+            is_up_to_date = most_recent_count == target_total_tickers
 
             # 과거 데이터는 신규 상장 종목이 있으므로 90% 이상이면 정상으로 판별
-            is_deep_enough = (deep_history_count >= target_total_tickers * 0.9)
+            is_deep_enough = deep_history_count >= target_total_tickers * 0.9
 
             if is_up_to_date and is_deep_enough:
                 status = "Healthy (최신화 100% 완료 및 과거 데이터 충분)"
@@ -132,21 +145,28 @@ def check_daily_ohlcv(market: str = "KOSPI"):
             "target_total_tickers": target_total_tickers,
             "total_saved_rows": total_rows,
             "up_to_date_integrity": {
-                "latest_date": distribution[0]['last_date'] if distribution else None,
-                "tickers_with_latest_date": distribution[0]['ticker_count'] if distribution else 0,
-                "is_100_percent": is_up_to_date
+                "latest_date": distribution[0]["last_date"] if distribution else None,
+                "tickers_with_latest_date": distribution[0]["ticker_count"]
+                if distribution
+                else 0,
+                "is_100_percent": is_up_to_date,
             },
             "historical_depth_integrity": {
                 "tickers_with_400_plus_days": deep_history_count,
-                "percentage": round((deep_history_count / target_total_tickers) * 100, 1) if target_total_tickers > 0 else 0,
-                "is_healthy": is_deep_enough
+                "percentage": round(
+                    (deep_history_count / target_total_tickers) * 100, 1
+                )
+                if target_total_tickers > 0
+                else 0,
+                "is_healthy": is_deep_enough,
             },
-            "latest_date_distribution": distribution
+            "latest_date_distribution": distribution,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB Query Error: {e}")
+        raise HTTPException(status_code=500, detail=f"DB Query Error: {e}") from e
     finally:
         conn.close()
+
 
 @minute_router.get("/check")
 def check_minute_ohlcv(market: str = "KOSPI"):
@@ -180,20 +200,26 @@ def check_minute_ohlcv(market: str = "KOSPI"):
         distribution = [dict(row) for row in cursor.fetchall()]
 
         # 2. 적재된 고유 종목 수 및 전체 캔들 수 확인
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(DISTINCT m.ticker)
             FROM minute_ohlcv m
             JOIN stock_codes s ON m.ticker = s.ticker
             WHERE s.market = ?
-        """, (market,))
+        """,
+            (market,),
+        )
         total_tickers = cursor.fetchone()[0]
 
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*)
             FROM minute_ohlcv m
             JOIN stock_codes s ON m.ticker = s.ticker
             WHERE s.market = ?
-        """, (market,))
+        """,
+            (market,),
+        )
         total_rows = cursor.fetchone()[0]
 
         status = "No Data"
@@ -201,12 +227,12 @@ def check_minute_ohlcv(market: str = "KOSPI"):
             # 분봉은 스케줄러가 도는 35분 동안 수집 시점이 계속 변하고,
             # 거래량이 없는 소외주는 최신 분봉이 10분 전일 수도 있어서 '정확히 같은 분(Minute)'으로 80%가 뭉치는 것은 불가능합니다.
             # 따라서 최신 날짜(YYYYMMDD)가 같은 종목들의 비율을 합산하여 정합성을 평가합니다.
-            most_recent_date = distribution[0]['last_datetime'][:8]  # '20260707'
+            most_recent_date = distribution[0]["last_datetime"][:8]  # '20260707'
 
             same_date_count = 0
             for row in distribution:
-                if row['last_datetime'].startswith(most_recent_date):
-                    same_date_count += row['ticker_count']
+                if row["last_datetime"].startswith(most_recent_date):
+                    same_date_count += row["ticker_count"]
 
             if same_date_count >= total_tickers * 0.7:
                 status = "Healthy (정상 적재 완료: 분봉 시간은 종목별 거래량/수집 시간에 따라 자연스럽게 분산됨)"
@@ -217,13 +243,16 @@ def check_minute_ohlcv(market: str = "KOSPI"):
             "status": status,
             "total_saved_tickers": total_tickers,
             "total_saved_rows": total_rows,
-            "average_minutes_per_ticker": round(total_rows / total_tickers, 1) if total_tickers > 0 else 0,
-            "latest_time_distribution": distribution[:10]
+            "average_minutes_per_ticker": round(total_rows / total_tickers, 1)
+            if total_tickers > 0
+            else 0,
+            "latest_time_distribution": distribution[:10],
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB Query Error: {e}")
+        raise HTTPException(status_code=500, detail=f"DB Query Error: {e}") from e
     finally:
         conn.close()
+
 
 @minute_router.get("/verify")
 async def verify_minute_integrity(sample_size: int = 10, market: str = "KOSPI"):
@@ -231,7 +260,6 @@ async def verify_minute_integrity(sample_size: int = 10, market: str = "KOSPI"):
     무작위 종목을 추출하여, DB에 저장된 가장 최신 시점을 기준으로 KIS API를 다시 호출해
     현재 DB(minute_ohlcv)에 적재된 데이터(시가/고가/저가/종가/거래량)가 100% 일치하는지 정합성을 검증합니다.
     """
-    import random
     from core.database import connect_sqlite
     from tasks.minute_ohlcv_scheduler import fetch_minute_data
 
@@ -240,11 +268,16 @@ async def verify_minute_integrity(sample_size: int = 10, market: str = "KOSPI"):
         cursor = conn.cursor()
 
         # 1. 무작위 종목 추출
-        cursor.execute("SELECT ticker, name FROM stock_codes WHERE market = ? ORDER BY RANDOM() LIMIT ?", (market, sample_size))
+        cursor.execute(
+            "SELECT ticker, name FROM stock_codes WHERE market = ? ORDER BY RANDOM() LIMIT ?",
+            (market, sample_size),
+        )
         tickers = [dict(row) for row in cursor.fetchall()]
 
         if not tickers:
-            raise HTTPException(status_code=404, detail=f"No tickers found in stock_codes for {market}.")
+            raise HTTPException(
+                status_code=404, detail=f"No tickers found in stock_codes for {market}."
+            )
 
         results = []
         total_candles_checked = 0
@@ -252,27 +285,41 @@ async def verify_minute_integrity(sample_size: int = 10, market: str = "KOSPI"):
         total_missing = 0
 
         for t_info in tickers:
-            ticker = t_info['ticker']
+            ticker = t_info["ticker"]
 
             # 2. DB에서 해당 종목의 가장 최신 날짜/시간 조회 (스케줄러 딜레이로 인한 실시간 노이즈 방지)
-            cursor.execute("SELECT date, time FROM minute_ohlcv WHERE ticker = ? ORDER BY date DESC, time DESC LIMIT 1", (ticker,))
+            cursor.execute(
+                "SELECT date, time FROM minute_ohlcv WHERE ticker = ? ORDER BY date DESC, time DESC LIMIT 1",
+                (ticker,),
+            )
             latest_row = cursor.fetchone()
             if not latest_row:
-                results.append({"ticker": ticker, "name": t_info['name'], "status": "NO_DB_DATA"})
+                results.append(
+                    {"ticker": ticker, "name": t_info["name"], "status": "NO_DB_DATA"}
+                )
                 continue
 
-            target_date = latest_row['date']
-            target_time = latest_row['time']
+            target_date = latest_row["date"]
+            target_time = latest_row["time"]
 
             # 3. KIS API 호출 (DB의 최신 시점부터 과거 120개)
             try:
                 api_df = await fetch_minute_data(ticker, target_date, target_time)
             except Exception as e:
-                results.append({"ticker": ticker, "name": t_info['name'], "status": "API_ERROR", "detail": str(e)})
+                results.append(
+                    {
+                        "ticker": ticker,
+                        "name": t_info["name"],
+                        "status": "API_ERROR",
+                        "detail": str(e),
+                    }
+                )
                 continue
 
             if api_df.empty:
-                results.append({"ticker": ticker, "name": t_info['name'], "status": "NO_API_DATA"})
+                results.append(
+                    {"ticker": ticker, "name": t_info["name"], "status": "NO_API_DATA"}
+                )
                 continue
 
             # 4. DB 일괄 조회를 위한 조건문 생성
@@ -280,13 +327,15 @@ async def verify_minute_integrity(sample_size: int = 10, market: str = "KOSPI"):
             params = [ticker]
             for _, row in api_df.iterrows():
                 conds.append("(date = ? AND time = ?)")
-                params.extend([row.get('stck_bsop_date'), row.get('stck_cntg_hour')])
+                params.extend([row.get("stck_bsop_date"), row.get("stck_cntg_hour")])
 
             query = f"SELECT date, time, open, high, low, close, volume FROM minute_ohlcv WHERE ticker = ? AND ({' OR '.join(conds)})"
             cursor.execute(query, params)
 
             # (date, time)을 키로 하는 딕셔너리로 변환하여 고속 탐색
-            db_rows = {(row['date'], row['time']): dict(row) for row in cursor.fetchall()}
+            db_rows = {
+                (row["date"], row["time"]): dict(row) for row in cursor.fetchall()
+            }
 
             # 5. 데이터 1:1 검증
             match_count = 0
@@ -310,41 +359,65 @@ async def verify_minute_integrity(sample_size: int = 10, market: str = "KOSPI"):
                     missing_in_db_count += 1
                     continue
 
-                if (api_open == db_row['open'] and
-                    api_high == db_row['high'] and
-                    api_low == db_row['low'] and
-                    api_close == db_row['close'] and
-                    api_volume == db_row['volume']):
+                if (
+                    api_open == db_row["open"]
+                    and api_high == db_row["high"]
+                    and api_low == db_row["low"]
+                    and api_close == db_row["close"]
+                    and api_volume == db_row["volume"]
+                ):
                     match_count += 1
                 else:
                     mismatch_count += 1
                     if len(mismatch_details) < 5:
-                        mismatch_details.append({
-                            "date": date_val,
-                            "time": time_val,
-                            "api": {"open": api_open, "high": api_high, "low": api_low, "close": api_close, "vol": api_volume},
-                            "db": {"open": db_row['open'], "high": db_row['high'], "low": db_row['low'], "close": db_row['close'], "vol": db_row['volume']}
-                        })
+                        mismatch_details.append(
+                            {
+                                "date": date_val,
+                                "time": time_val,
+                                "api": {
+                                    "open": api_open,
+                                    "high": api_high,
+                                    "low": api_low,
+                                    "close": api_close,
+                                    "vol": api_volume,
+                                },
+                                "db": {
+                                    "open": db_row["open"],
+                                    "high": db_row["high"],
+                                    "low": db_row["low"],
+                                    "close": db_row["close"],
+                                    "vol": db_row["volume"],
+                                },
+                            }
+                        )
 
             total_candles_checked += len(api_df)
             total_mismatches += mismatch_count
             total_missing += missing_in_db_count
 
-            status = "PASS" if mismatch_count == 0 and missing_in_db_count == 0 else "FAIL"
+            status = (
+                "PASS" if mismatch_count == 0 and missing_in_db_count == 0 else "FAIL"
+            )
 
-            results.append({
-                "ticker": ticker,
-                "name": t_info['name'],
-                "target_datetime": f"{target_date} {target_time}",
-                "candles_checked": len(api_df),
-                "matches": match_count,
-                "mismatches": mismatch_count,
-                "missing_in_db": missing_in_db_count,
-                "status": status,
-                "mismatch_sample": mismatch_details
-            })
+            results.append(
+                {
+                    "ticker": ticker,
+                    "name": t_info["name"],
+                    "target_datetime": f"{target_date} {target_time}",
+                    "candles_checked": len(api_df),
+                    "matches": match_count,
+                    "mismatches": mismatch_count,
+                    "missing_in_db": missing_in_db_count,
+                    "status": status,
+                    "mismatch_sample": mismatch_details,
+                }
+            )
 
-        overall_status = "Healthy (100% Match)" if total_mismatches == 0 and total_missing == 0 else "Needs Check (Mismatches Found)"
+        overall_status = (
+            "Healthy (100% Match)"
+            if total_mismatches == 0 and total_missing == 0
+            else "Needs Check (Mismatches Found)"
+        )
         return {
             "overall_status": overall_status,
             "summary": {
@@ -352,15 +425,27 @@ async def verify_minute_integrity(sample_size: int = 10, market: str = "KOSPI"):
                 "total_candles_checked": total_candles_checked,
                 "total_mismatches": total_mismatches,
                 "total_missing_in_db": total_missing,
-                "accuracy_rate": round(((total_candles_checked - total_mismatches - total_missing) / total_candles_checked * 100), 2) if total_candles_checked > 0 else 0
+                "accuracy_rate": round(
+                    (
+                        (total_candles_checked - total_mismatches - total_missing)
+                        / total_candles_checked
+                        * 100
+                    ),
+                    2,
+                )
+                if total_candles_checked > 0
+                else 0,
             },
-            "details": results
+            "details": results,
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Minute Verification Error: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Minute Verification Error: {e}"
+        ) from e
     finally:
         conn.close()
+
 
 @daily_router.get("/verify")
 async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
@@ -370,6 +455,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
     """
     import random
     from datetime import datetime, timedelta
+
     from core.database import connect_sqlite
     from tasks.daily_ohlcv_scheduler import fetch_and_save_ohlcv
 
@@ -378,11 +464,16 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
         cursor = conn.cursor()
 
         # 1. 무작위 종목 추출
-        cursor.execute("SELECT ticker, name FROM stock_codes WHERE market = ? ORDER BY RANDOM() LIMIT ?", (market, sample_size))
+        cursor.execute(
+            "SELECT ticker, name FROM stock_codes WHERE market = ? ORDER BY RANDOM() LIMIT ?",
+            (market, sample_size),
+        )
         tickers = [dict(row) for row in cursor.fetchall()]
 
         if not tickers:
-            raise HTTPException(status_code=404, detail=f"No tickers found in stock_codes for {market}.")
+            raise HTTPException(
+                status_code=404, detail=f"No tickers found in stock_codes for {market}."
+            )
 
         results = []
         total_candles_checked = 0
@@ -390,7 +481,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
         total_missing = 0
 
         for t_info in tickers:
-            ticker = t_info['ticker']
+            ticker = t_info["ticker"]
 
             # 2. 5일 ~ 300일 전 사이의 무작위 종료일 설정 (너무 최신 데이터 배제)
             random_days_ago = random.randint(5, 300)
@@ -399,29 +490,46 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
             # 3. KIS API 호출 (end_date로부터 과거 100영업일치 캔들 요청)
             try:
                 # days_to_subtract를 150으로 주어 주말/휴일 감안하더라도 KIS API 최대치인 100개를 받아옴
-                api_data = await fetch_and_save_ohlcv(ticker, end_date, days_to_subtract=150)
+                api_data = await fetch_and_save_ohlcv(
+                    ticker, end_date, days_to_subtract=150
+                )
             except Exception as e:
-                results.append({"ticker": ticker, "name": t_info['name'], "status": "API_ERROR", "detail": str(e)})
+                results.append(
+                    {
+                        "ticker": ticker,
+                        "name": t_info["name"],
+                        "status": "API_ERROR",
+                        "detail": str(e),
+                    }
+                )
                 continue
 
             if not api_data:
-                results.append({"ticker": ticker, "name": t_info['name'], "status": "NO_API_DATA"})
+                results.append(
+                    {"ticker": ticker, "name": t_info["name"], "status": "NO_API_DATA"}
+                )
                 continue
 
             # API 데이터 중 정상 일자만 필터링
             valid_api_items = [item for item in api_data if item.stck_bsop_date]
             if not valid_api_items:
-                results.append({"ticker": ticker, "name": t_info['name'], "status": "NO_VALID_API_DATA"})
+                results.append(
+                    {
+                        "ticker": ticker,
+                        "name": t_info["name"],
+                        "status": "NO_VALID_API_DATA",
+                    }
+                )
                 continue
 
             # DB 검증을 위해 날짜 리스트 추출
             date_list = [item.stck_bsop_date for item in valid_api_items]
-            placeholders = ','.join(['?'] * len(date_list))
+            placeholders = ",".join(["?"] * len(date_list))
 
             # 4. DB 데이터 조회
             query = f"SELECT date, open, high, low, close, volume FROM daily_ohlcv WHERE ticker = ? AND date IN ({placeholders})"
             cursor.execute(query, [ticker] + date_list)
-            db_rows = {row['date']: dict(row) for row in cursor.fetchall()}
+            db_rows = {row["date"]: dict(row) for row in cursor.fetchall()}
 
             # 5. 데이터 비교
             match_count = 0
@@ -442,40 +550,66 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
                     missing_in_db_count += 1
                     continue
 
-                if (api_open == db_row['open'] and
-                    api_high == db_row['high'] and
-                    api_low == db_row['low'] and
-                    api_close == db_row['close'] and
-                    api_volume == db_row['volume']):
+                if (
+                    api_open == db_row["open"]
+                    and api_high == db_row["high"]
+                    and api_low == db_row["low"]
+                    and api_close == db_row["close"]
+                    and api_volume == db_row["volume"]
+                ):
                     match_count += 1
                 else:
                     mismatch_count += 1
-                    if len(mismatch_details) < 5: # 각 종목당 최대 5개까지만 상세 리포트
-                        mismatch_details.append({
-                            "date": date_val,
-                            "api": {"open": api_open, "high": api_high, "low": api_low, "close": api_close, "vol": api_volume},
-                            "db": {"open": db_row['open'], "high": db_row['high'], "low": db_row['low'], "close": db_row['close'], "vol": db_row['volume']}
-                        })
+                    if (
+                        len(mismatch_details) < 5
+                    ):  # 각 종목당 최대 5개까지만 상세 리포트
+                        mismatch_details.append(
+                            {
+                                "date": date_val,
+                                "api": {
+                                    "open": api_open,
+                                    "high": api_high,
+                                    "low": api_low,
+                                    "close": api_close,
+                                    "vol": api_volume,
+                                },
+                                "db": {
+                                    "open": db_row["open"],
+                                    "high": db_row["high"],
+                                    "low": db_row["low"],
+                                    "close": db_row["close"],
+                                    "vol": db_row["volume"],
+                                },
+                            }
+                        )
 
             total_candles_checked += len(valid_api_items)
             total_mismatches += mismatch_count
             total_missing += missing_in_db_count
 
-            status = "PASS" if mismatch_count == 0 and missing_in_db_count == 0 else "FAIL"
+            status = (
+                "PASS" if mismatch_count == 0 and missing_in_db_count == 0 else "FAIL"
+            )
 
-            results.append({
-                "ticker": ticker,
-                "name": t_info['name'],
-                "target_end_date": end_date.strftime("%Y%m%d"),
-                "candles_checked": len(valid_api_items),
-                "matches": match_count,
-                "mismatches": mismatch_count,
-                "missing_in_db": missing_in_db_count,
-                "status": status,
-                "mismatch_sample": mismatch_details
-            })
+            results.append(
+                {
+                    "ticker": ticker,
+                    "name": t_info["name"],
+                    "target_end_date": end_date.strftime("%Y%m%d"),
+                    "candles_checked": len(valid_api_items),
+                    "matches": match_count,
+                    "mismatches": mismatch_count,
+                    "missing_in_db": missing_in_db_count,
+                    "status": status,
+                    "mismatch_sample": mismatch_details,
+                }
+            )
 
-        overall_status = "Healthy (100% Match)" if total_mismatches == 0 and total_missing == 0 else "Needs Check (Mismatches Found)"
+        overall_status = (
+            "Healthy (100% Match)"
+            if total_mismatches == 0 and total_missing == 0
+            else "Needs Check (Mismatches Found)"
+        )
         return {
             "overall_status": overall_status,
             "summary": {
@@ -483,14 +617,26 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
                 "total_candles_checked": total_candles_checked,
                 "total_mismatches": total_mismatches,
                 "total_missing_in_db": total_missing,
-                "accuracy_rate": round(((total_candles_checked - total_mismatches - total_missing) / total_candles_checked * 100), 2) if total_candles_checked > 0 else 0
+                "accuracy_rate": round(
+                    (
+                        (total_candles_checked - total_mismatches - total_missing)
+                        / total_candles_checked
+                        * 100
+                    ),
+                    2,
+                )
+                if total_candles_checked > 0
+                else 0,
             },
-            "details": results
+            "details": results,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Daily Verification Error: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Daily Verification Error: {e}"
+        ) from e
     finally:
         conn.close()
+
 
 router.include_router(daily_router)
 router.include_router(minute_router)

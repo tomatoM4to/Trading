@@ -1,7 +1,7 @@
 import os
 import sqlite3
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 
 def get_sqlite_db_path() -> Path:
@@ -32,7 +32,7 @@ def init_sqlite_connection() -> None:
     conn = connect_sqlite()
     try:
         # daily_ohlcv 테이블 생성
-        conn.execute('''
+        conn.execute("""
         CREATE TABLE IF NOT EXISTS daily_ohlcv (
             ticker TEXT NOT NULL,
             date TEXT NOT NULL,
@@ -43,12 +43,14 @@ def init_sqlite_connection() -> None:
             volume INTEGER NOT NULL,
             PRIMARY KEY (ticker, date)
         )
-        ''')
+        """)
         # 시계열 조회를 위한 인덱스 생성
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_date ON daily_ohlcv(date)')
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_date ON daily_ohlcv(date)"
+        )
 
         # minute_ohlcv 테이블 (추후 분봉 적재 스케줄러 용)
-        conn.execute('''
+        conn.execute("""
         CREATE TABLE IF NOT EXISTS minute_ohlcv (
             ticker TEXT NOT NULL,
             date TEXT NOT NULL,
@@ -61,9 +63,13 @@ def init_sqlite_connection() -> None:
             amount REAL,
             PRIMARY KEY (ticker, date, time)
         )
-        ''')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_date_time ON minute_ohlcv(date, time)')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_ticker_date_time ON minute_ohlcv(ticker, date, time)')
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_date_time ON minute_ohlcv(date, time)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_ticker_date_time ON minute_ohlcv(ticker, date, time)"
+        )
 
         conn.commit()
     finally:

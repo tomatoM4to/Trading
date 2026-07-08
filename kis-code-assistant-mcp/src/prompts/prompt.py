@@ -1,27 +1,24 @@
 from fastmcp import FastMCP
 
+
 def register_prompts(mcp: FastMCP):
     """mcp 인스턴스에 프롬프트들을 등록하는 함수"""
-    
+
     @mcp.prompt(
         name="kis_detailed_code",
         title="KIS API 코드 생성 도우미 (상세)",
-        description="종목코드, 작업, 카테고리를 상세히 입력해서 정확한 KIS API 코드 생성"
+        description="종목코드, 작업, 카테고리를 상세히 입력해서 정확한 KIS API 코드 생성",
     )
-    def kis_detailed_code_prompt(
-        stock_code,
-        task,
-        category: str = "국내주식"
-    ) -> str:
+    def kis_detailed_code_prompt(stock_code, task, category: str = "국내주식") -> str:
         """
         KIS API 사용을 위한 코드 생성 도우미 프롬프트
-        
+
         Args:
             task: 수행하고 싶은 작업 (예: "주식 현재가 조회", "계좌 잔고 확인")
             stock_code: 종목코드 (예: "005930" - 삼성전자)
             category: API 타입 (국내주식, 해외주식, 인증 등)
         """
-            
+
         prompt_template = f"""
 # KIS API 코드 생성 요청
 
@@ -70,48 +67,48 @@ def register_prompts(mcp: FastMCP):
    import time
    import json
    sys.path.extend(['..', '.'])
-   
+
    # 기존 kis_auth 모듈 활용
    import kis_auth as ka
-   
+
    # 로깅 설정
    logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
    logger = logging.getLogger(__name__)
-   
+
    # API 호출 함수 (유량 제어 포함)
    def [함수명 확인]:
        # 인증 (기존 kis_auth 활용)
        ka.auth(svr="vps", product="01")  # 모의투자, 종합계좌
        # ka.auth(svr="prod", product="01")  # 실전투자시 주석 해제
-       
+
        # 유량 제어 - 모의투자 0.5초, 실전투자 0.05초
        ka.smart_sleep()
-       
+
        # API 호출 (ka.auth() 후에는 바로 함수 호출만 하면 됨)
        try:
            # 예시: 주식현재가 조회 (실제 함수명은 GitHub 소스코드 확인 후 사용)
            result = [함수명 확인](
                env_dv="demo",
-               fid_cond_mrkt_div_code="J", 
+               fid_cond_mrkt_div_code="J",
                fid_input_iscd="{stock_code}"
            )
            return result
        except Exception as e:
            logger.error(f"API 호출 오류: {{e}}")
            return None
-   
+
    # WebSocket 예제 (필요시)
    def websocket_example():
        # 기존 kis_auth의 WebSocket 기능 활용
        ka.auth_ws()
        kws = ka.KISWebSocket(api_url="/tryitout")
-       
+
        # 주의: 1개 appkey당 최대 41건까지만 등록 가능
        # 현재 등록된 구독: 0/41
-       
+
        # 구독 로직 구현
        pass
-   
+
    # 실행 부분
    if __name__ == "__main__":
        try:
@@ -145,17 +142,15 @@ def register_prompts(mcp: FastMCP):
 ## 📧 문의사항
 - [한국투자증권 고객의 소리](https://securities.koreainvestment.com/main/customer/support/Support.jsp?cmd=agree_3) > 홈페이지 로그인 후 이용해주세요
 """
-        
+
         return prompt_template
 
     @mcp.prompt(
         name="kis_easy_code",
         title="KIS API 코드 생성 도우미 (초보자용)",
-        description="자연어로 간단히 요청하면 KIS API 코드를 자동 분석해서 생성 (초보자용)"
+        description="자연어로 간단히 요청하면 KIS API 코드를 자동 분석해서 생성 (초보자용)",
     )
-    def kis_easy_code_prompt(
-        user_request: str = "삼성전자 주가 확인"
-    ) -> str:
+    def kis_easy_code_prompt(user_request: str = "삼성전자 주가 확인") -> str:
         """
         사용자 자연어 요청을 분석하여 관련 API를 찾아 완전한 샘플코드를 생성하는 프롬프트
 

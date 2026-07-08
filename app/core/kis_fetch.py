@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from collections import namedtuple
 
 import requests
 from core import kis_auth as ka
@@ -14,6 +13,7 @@ class DotDict(dict):
     중첩된 dict와 list 내부의 dict까지 모두 재귀적으로 래핑합니다.
     존재하지 않는 속성에 접근 시 ""(빈 문자열)을 반환하여 getattr 호환성을 유지합니다.
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         for key, value in self.items():
@@ -53,7 +53,9 @@ class APIResp:
         if self._is_success:
             try:
                 # 헤더 파싱 (소문자 키만 추출)
-                self._header = DotDict({k: v for k, v in resp.headers.items() if k.islower()})
+                self._header = DotDict(
+                    {k: v for k, v in resp.headers.items() if k.islower()}
+                )
 
                 # 바디 파싱
                 self._body = DotDict(resp.json())
@@ -159,7 +161,9 @@ async def start_q_worker():
                 logger.info("[KIS Async Worker] Worker task cancelled.")
                 break
             except Exception as e:
-                logger.error("[KIS Async Worker] Unexpected error in consumer loop: %s", e)
+                logger.error(
+                    "[KIS Async Worker] Unexpected error in consumer loop: %s", e
+                )
 
     if _kis_queue is None:
         _kis_queue = asyncio.PriorityQueue()
@@ -167,6 +171,7 @@ async def start_q_worker():
         logger.info(
             "[KIS Async Worker] Started background worker for API rate limiting (20 req/s)."
         )
+
 
 async def stop_q_worker():
     """앱 종료 시 백그라운드 워커를 안전하게 종료합니다."""
@@ -179,7 +184,6 @@ async def stop_q_worker():
             pass
         _kis_worker_task = None
         logger.info("[KIS Async Worker] Worker task stopped safely.")
-
 
 
 def _do_fetch(

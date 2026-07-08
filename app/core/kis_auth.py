@@ -2,7 +2,6 @@ import copy
 import json
 import logging
 import os
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -53,6 +52,7 @@ def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
         product: 계좌상품코드 2자리 (예: 01/03/08/22/29)
         force: 파일 캐시를 무시하고 강제로 재발급 받을지 여부
     """
+
     def _get_token_path(now: datetime | None = None) -> Path:
         current = now or datetime.today()
         return config_root / f"KIS{current.strftime('%Y%m%d')}"
@@ -128,7 +128,11 @@ def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
                 f.write(f"valid-date: {valid_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
             logger.info("New token acquired and saved to %s", token_path.name)
         else:
-            logger.error("Get authentication token failed. Status Code: %s, Response: %s", res.status_code, res.text)
+            logger.error(
+                "Get authentication token failed. Status Code: %s, Response: %s",
+                res.status_code,
+                res.text,
+            )
             logger.error("Restart app and retry.")
             return
     else:

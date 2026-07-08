@@ -115,3 +115,8 @@
   ```bash
   uv run fastapi dev app/main.py
   ```
+- **코드 린팅 및 자동 포매팅 (Ruff)**: 커밋 전 아래 명령어를 통해 코드 스타일과 잠재적 에러를 자동 수정.
+  ```bash
+  uv run ruff check . --fix
+  uv run ruff format .
+  ```

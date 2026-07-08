@@ -1,4 +1,3 @@
-import asyncio
 import os
 import re
 import sys
@@ -6,13 +5,12 @@ import time
 
 import requests
 import uvicorn
-from fastmcp import FastMCP, Context
+from fastmcp import Context, FastMCP
+from src.prompts.prompt import register_prompts
+from src.utils.api_searcher import APISearcher
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-
-from src.prompts.prompt import register_prompts
-from src.utils.api_searcher import APISearcher
 
 # =============================================================================
 # MAIN CONFIGURATION AND SETUP
@@ -22,7 +20,7 @@ from src.utils.api_searcher import APISearcher
 mcp = FastMCP(
     name="kis-code-assistant-mcp",
     version="0.1.0",
-    instructions="If the user requests stock market information, trading-related code, or investment data, ALWAYS call this tool. Do NOT generate the code yourself without first checking the API search results."
+    instructions="If the user requests stock market information, trading-related code, or investment data, ALWAYS call this tool. Do NOT generate the code yourself without first checking the API search results.",
 )
 
 # Data configuration
@@ -39,19 +37,21 @@ register_prompts(mcp)
 # UTILITY FUNCTIONS
 # =============================================================================
 
+
 def extract_category_function_from_url(github_url: str) -> dict:
     """GitHub URL에서 category와 function_name 추출"""
     # examples_llm/{category}/{function_name}/{function_name}.py 패턴 매칭
-    pattern = r'examples_llm/([^/]+)/([^/]+)/(?:chk_)?([^/]+)\.py'
+    pattern = r"examples_llm/([^/]+)/([^/]+)/(?:chk_)?([^/]+)\.py"
     match = re.search(pattern, github_url)
-    
+
     if match:
         category = match.group(1)
         function_name = match.group(2)
         return {"category": category, "function_name": function_name}
     return None
 
-# 공통 프롬프트 
+
+# 공통 프롬프트
 COMMON_DESCRIPTION = """
 검색 파라미터:
 query: 사용자의 원본 질문을 그대로 입력하세요 (로깅용)
@@ -70,13 +70,13 @@ response: 응답 데이터 내용으로 검색
 
 검색 전략 가이드라인:
 1. 첫 번째 검색에서 결과가 없으면, 다른 파라미터 조합으로 재시도
-2. description 파라미터는 정확히 매칭되는 키워드만 사용 
+2. description 파라미터는 정확히 매칭되는 키워드만 사용
 3. 검색 실패시 순서: query만 → function_name → api_name → subcategory 순으로 시도
 4. "재무", "financial", "매출", "revenue" 등 핵심 키워드는 function_name이나 api_name으로 우선 검색
 
 예시 검색 전략:
 - 재무 정보 요청시: function_name="financial" 또는 function_name="finance" 우선 시도
-- 실시간 데이터: subcategory="실시간시세" 우선 시도  
+- 실시간 데이터: subcategory="실시간시세" 우선 시도
 - 매출액/실적: response="매출액" 또는 function_name="financial" 시도
 """
 
@@ -90,7 +90,9 @@ ex) 인증 토큰 발급해줘. -> subcategory="인증", function_name="auth_tok
 ex) 웹소켓 연결 방법 알려줘. -> subcategory="인증", function_name="auth_ws_token"
 """
 
-TOOL_DESCRIPTIONS["search_domestic_stock_api"] = f"""국내주식 카테고리에 대한 검색 결과를 반환합니다.
+TOOL_DESCRIPTIONS[
+    "search_domestic_stock_api"
+] = f"""국내주식 카테고리에 대한 검색 결과를 반환합니다.
 {COMMON_DESCRIPTION}
 [기본시세]
 ex) 삼성전자 현재 매수/매도 호가와 잔량 알려줘. -> subcategory="기본시세", api_name="주식현재가 호가/예상체결", function_name="inquire_asking_price_exp_ccn"
@@ -103,7 +105,7 @@ ex) 코스피 상한가, 하한가 알려줘. -> subcategory="기본시세", res
 ex) 삼성전자 시가총액 확인해줘. -> subcategory="기본시세", response="HTS 시가총액"
 ex) SK하이닉스 PER과 PBR 알려줘. -> subcategory="기본시세", response="PER"
 
-[순위분석] 
+[순위분석]
 ex) 오늘 거래대금 상위 종목 보여줘. -> subcategory="순위분석"
 ex) 등락률 순위 알려줘. -> subcategory="순위분석", function_name="fluctuation"
 ex) 등락률 상위 종목들의 데이터 순위 보여줘. -> subcategory="순위분석", response="데이터 순위"
@@ -143,7 +145,9 @@ ex) 삼성전자 실시간 체결 현황 웹소켓으로 받아줘. -> subcatego
 ex) 장중 회원사별 거래 현황 실시간으로 보여줘. -> subcategory="실시간시세", response="회원사별 거래량"
 """
 
-TOOL_DESCRIPTIONS["search_domestic_bond_api"] = f"""국내채권 카테고리에 대한 검색 결과를 반환합니다.
+TOOL_DESCRIPTIONS[
+    "search_domestic_bond_api"
+] = f"""국내채권 카테고리에 대한 검색 결과를 반환합니다.
 {COMMON_DESCRIPTION}
 [기본시세]
 ex) 국고채 3년물 호가창에서 총 매도호가 잔량 알려줘. -> subcategory="기본시세", description="총 매도호가 잔량"
@@ -167,7 +171,9 @@ ex) 채권지수 움직임 실시간으로 받아줘. -> subcategory="실시간�
 ex) 채권 체결가격 변화 웹소켓으로 받고 싶어. -> subcategory="실시간시세", description="실시간 체결가"
 """
 
-TOOL_DESCRIPTIONS["search_domestic_futureoption_api"] = f"""국내선물옵션 카테고리에 대한 검색 결과를 반환합니다.
+TOOL_DESCRIPTIONS[
+    "search_domestic_futureoption_api"
+] = f"""국내선물옵션 카테고리에 대한 검색 결과를 반환합니다.
 {COMMON_DESCRIPTION}
 [기본시세]
 ex) 코스피200 선물 현재 호가 상황 알려줘. -> subcategory="기본시세", api_name="선물옵션 시세호가", function_name="inquire_asking_price"
@@ -194,7 +200,9 @@ ex) 주식선물 실시간 체결가 웹소켓으로 받고 싶어. -> subcatego
 ex) 옵션 그리스 지표 실시간 변화 추적해줘. -> subcategory="실시간시세", response="델타, 감마, 베가"
 """
 
-TOOL_DESCRIPTIONS["search_overseas_stock_api"] = f"""해외주식 카테고리에 대한 검색 결과를 반환합니다.
+TOOL_DESCRIPTIONS[
+    "search_overseas_stock_api"
+] = f"""해외주식 카테고리에 대한 검색 결과를 반환합니다.
 {COMMON_DESCRIPTION}
 [기본시세]
 ex) 테슬라 현재 1호가 매수/매도 가격 알려줘. -> subcategory="기본시세", api_name="해외주식 현재가 1호가", function_name="inquire_asking_price"
@@ -225,7 +233,9 @@ ex) 미국 주간거래 실시간 시세 모니터링해줘. -> subcategory="실
 ex) 해외주식 체결 통보 웹소켓으로 받고 싶어. -> subcategory="실시간시세", response="체결통보"
 """
 
-TOOL_DESCRIPTIONS["search_overseas_futureoption_api"] = f"""해외선물옵션 카테고리에 대한 검색 결과를 반환합니다.
+TOOL_DESCRIPTIONS[
+    "search_overseas_futureoption_api"
+] = f"""해외선물옵션 카테고리에 대한 검색 결과를 반환합니다.
 {COMMON_DESCRIPTION}
 [기본시세]
 ex) WTI 원유 선물 현재가 알려줘. -> subcategory="기본시세", api_name="해외선물종목현재가", function_name="inquire_price"
@@ -265,7 +275,9 @@ ex) 권리행사일 다가오는 ELW 실시간 추적해줘. -> subcategory="실
 ex) ELW 델타값 변화 웹소켓으로 받고 싶어. -> subcategory="실시간시세", response="델타값 변화"
 """
 
-TOOL_DESCRIPTIONS["search_etfetn_api"] = f"""ETF/ETN 카테고리에 대한 검색 결과를 반환합니다.
+TOOL_DESCRIPTIONS[
+    "search_etfetn_api"
+] = f"""ETF/ETN 카테고리에 대한 검색 결과를 반환합니다.
 {COMMON_DESCRIPTION}
 [기본시세]
 ex) KODEX 200 ETF NAV 추이 보여줘. -> subcategory="기본시세", api_name="NAV 비교추이(종목)", function_name="nav_comparison_trend"
@@ -287,17 +299,18 @@ ex) 레버리지 ETF 실시간 변동률 알려줘. -> subcategory="실시간시
 # MCP RESOURCES
 # =============================================================================
 
+
 @mcp.resource("internal://kis-api/{category}/{function_name}", mime_type="text/plain")
 def _kis_api_main_file(category: str, function_name: str) -> dict:
     """KIS API 메인 파일을 읽는 템플릿 리소스"""
     if not (category and function_name):
         return "❌ 잘못된 파라미터"
-    
+
     url = f"https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/{category}/{function_name}/{function_name}.py"
-    
+
     # Rate limiting
     time.sleep(0.1)
-    
+
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -305,17 +318,20 @@ def _kis_api_main_file(category: str, function_name: str) -> dict:
     except requests.RequestException as e:
         return f"❌ GitHub 파일 읽기 실패: {str(e)}"
 
-@mcp.resource("internal://kis-api-chk/{category}/{function_name}", mime_type="text/plain")
+
+@mcp.resource(
+    "internal://kis-api-chk/{category}/{function_name}", mime_type="text/plain"
+)
 def _kis_api_check_file(category: str, function_name: str) -> dict:
     """KIS API 체크 파일을 읽는 템플릿 리소스"""
     if not (category and function_name):
         return "❌ 잘못된 파라미터"
-    
+
     url = f"https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/{category}/{function_name}/chk_{function_name}.py"
-    
+
     # Rate limiting
     time.sleep(0.1)
-    
+
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -335,16 +351,10 @@ SEARCH_OUTPUT_SCHEMA = {
         "status": {
             "type": "string",
             "enum": ["success", "error", "no_results"],
-            "description": "검색 상태"
+            "description": "검색 상태",
         },
-        "message": {
-            "type": "string",
-            "description": "상태 메시지"
-        },
-        "total_count": {
-            "type": "integer",
-            "description": "총 검색 결과 수"
-        },
+        "message": {"type": "string", "description": "상태 메시지"},
+        "total_count": {"type": "integer", "description": "총 검색 결과 수"},
         "results": {
             "type": "array",
             "items": {
@@ -353,25 +363,26 @@ SEARCH_OUTPUT_SCHEMA = {
                     "function_name": {"type": "string", "description": "API 함수명"},
                     "api_name": {"type": "string", "description": "API 이름"},
                     "category": {"type": "string", "description": "카테고리"},
-                    "subcategory": {"type": "string", "description": "서브카테고리"}
+                    "subcategory": {"type": "string", "description": "서브카테고리"},
                 },
-                "required": ["function_name", "api_name", "category", "subcategory"]
+                "required": ["function_name", "api_name", "category", "subcategory"],
             },
-            "description": "검색된 API 목록"
-        }
+            "description": "검색된 API 목록",
+        },
     },
-    "required": ["status", "message", "total_count", "results"]
+    "required": ["status", "message", "total_count", "results"],
 }
 
 # =============================================================================
 # MCP TOOLS
 # =============================================================================
 
+
 @mcp.tool(
     name="search_auth_api",
     title="인증",
     description=TOOL_DESCRIPTIONS["search_auth_api"],
-    output_schema=SEARCH_OUTPUT_SCHEMA
+    output_schema=SEARCH_OUTPUT_SCHEMA,
 )
 async def search_auth_api(
     query: str = None,
@@ -382,7 +393,7 @@ async def search_auth_api(
     response: str = None,
 ) -> dict:
     search_params = {"category": "auth"}
-    
+
     if subcategory:
         search_params["subcategory"] = subcategory
     if api_name:
@@ -393,7 +404,7 @@ async def search_auth_api(
         search_params["description"] = description
     if response:
         search_params["response"] = response
-    
+
     return searcher.search(**search_params)
 
 
@@ -401,7 +412,7 @@ async def search_auth_api(
     name="search_domestic_stock_api",
     title="국내주식",
     description=TOOL_DESCRIPTIONS["search_domestic_stock_api"],
-    output_schema=SEARCH_OUTPUT_SCHEMA
+    output_schema=SEARCH_OUTPUT_SCHEMA,
 )
 async def search_domestic_stock_api(
     query: str = None,
@@ -412,7 +423,7 @@ async def search_domestic_stock_api(
     response: str = None,
 ) -> dict:
     search_params = {"category": "domestic_stock"}
-    
+
     if subcategory:
         search_params["subcategory"] = subcategory
     if api_name:
@@ -423,14 +434,15 @@ async def search_domestic_stock_api(
         search_params["description"] = description
     if response:
         search_params["response"] = response
-    
+
     return searcher.search(**search_params)
+
 
 @mcp.tool(
     name="search_domestic_bond_api",
     title="국내채권",
     description=TOOL_DESCRIPTIONS["search_domestic_bond_api"],
-    output_schema=SEARCH_OUTPUT_SCHEMA
+    output_schema=SEARCH_OUTPUT_SCHEMA,
 )
 async def search_domestic_bond_api(
     query: str = None,
@@ -441,7 +453,7 @@ async def search_domestic_bond_api(
     response: str = None,
 ) -> dict:
     search_params = {"category": "domestic_bond"}
-    
+
     if subcategory:
         search_params["subcategory"] = subcategory
     if api_name:
@@ -452,14 +464,15 @@ async def search_domestic_bond_api(
         search_params["description"] = description
     if response:
         search_params["response"] = response
-    
+
     return searcher.search(**search_params)
+
 
 @mcp.tool(
     name="search_domestic_futureoption_api",
     title="국내선물옵션",
     description=TOOL_DESCRIPTIONS["search_domestic_futureoption_api"],
-    output_schema=SEARCH_OUTPUT_SCHEMA
+    output_schema=SEARCH_OUTPUT_SCHEMA,
 )
 async def search_domestic_futureoption_api(
     query: str = None,
@@ -470,7 +483,7 @@ async def search_domestic_futureoption_api(
     response: str = None,
 ) -> dict:
     search_params = {"category": "domestic_futureoption"}
-    
+
     if subcategory:
         search_params["subcategory"] = subcategory
     if api_name:
@@ -481,14 +494,15 @@ async def search_domestic_futureoption_api(
         search_params["description"] = description
     if response:
         search_params["response"] = response
-    
+
     return searcher.search(**search_params)
+
 
 @mcp.tool(
     name="search_overseas_stock_api",
     title="해외주식",
     description=TOOL_DESCRIPTIONS["search_overseas_stock_api"],
-    output_schema=SEARCH_OUTPUT_SCHEMA
+    output_schema=SEARCH_OUTPUT_SCHEMA,
 )
 async def search_overseas_stock_api(
     query: str = None,
@@ -499,7 +513,7 @@ async def search_overseas_stock_api(
     response: str = None,
 ) -> dict:
     search_params = {"category": "overseas_stock"}
-    
+
     if subcategory:
         search_params["subcategory"] = subcategory
     if api_name:
@@ -510,14 +524,15 @@ async def search_overseas_stock_api(
         search_params["description"] = description
     if response:
         search_params["response"] = response
-    
+
     return searcher.search(**search_params)
+
 
 @mcp.tool(
     name="search_overseas_futureoption_api",
     title="해외선물옵션",
     description=TOOL_DESCRIPTIONS["search_overseas_futureoption_api"],
-    output_schema=SEARCH_OUTPUT_SCHEMA
+    output_schema=SEARCH_OUTPUT_SCHEMA,
 )
 async def search_overseas_futureoption_api(
     query: str = None,
@@ -528,7 +543,7 @@ async def search_overseas_futureoption_api(
     response: str = None,
 ) -> dict:
     search_params = {"category": "overseas_futureoption"}
-    
+
     if subcategory:
         search_params["subcategory"] = subcategory
     if api_name:
@@ -539,14 +554,15 @@ async def search_overseas_futureoption_api(
         search_params["description"] = description
     if response:
         search_params["response"] = response
-    
+
     return searcher.search(**search_params)
+
 
 @mcp.tool(
     name="search_elw_api",
     title="ELW",
     description=TOOL_DESCRIPTIONS["search_elw_api"],
-    output_schema=SEARCH_OUTPUT_SCHEMA
+    output_schema=SEARCH_OUTPUT_SCHEMA,
 )
 async def search_elw_api(
     query: str = None,
@@ -557,7 +573,7 @@ async def search_elw_api(
     response: str = None,
 ) -> dict:
     search_params = {"category": "elw"}
-    
+
     if subcategory:
         search_params["subcategory"] = subcategory
     if api_name:
@@ -568,14 +584,15 @@ async def search_elw_api(
         search_params["description"] = description
     if response:
         search_params["response"] = response
-    
+
     return searcher.search(**search_params)
+
 
 @mcp.tool(
     name="search_etfetn_api",
     title="ETF/ETN",
     description=TOOL_DESCRIPTIONS["search_etfetn_api"],
-    output_schema=SEARCH_OUTPUT_SCHEMA
+    output_schema=SEARCH_OUTPUT_SCHEMA,
 )
 async def search_etfetn_api(
     query: str = None,
@@ -586,7 +603,7 @@ async def search_etfetn_api(
     response: str = None,
 ) -> dict:
     search_params = {"category": "etfetn"}
-    
+
     if subcategory:
         search_params["subcategory"] = subcategory
     if api_name:
@@ -597,7 +614,7 @@ async def search_etfetn_api(
         search_params["description"] = description
     if response:
         search_params["response"] = response
-    
+
     return searcher.search(**search_params)
 
 
@@ -605,28 +622,25 @@ async def search_etfetn_api(
     name="read_source_code",
     title="소스코드 읽기",
     description="""API 검색 결과의 URL에서 실제 GitHub 코드를 가져옵니다.
-    
+
     파라미터:
     - url_main: 메인 호출 파일 URL (필수)
     - url_chk: 테스트 호출 파일 URL (선택)
-    
+
     사용 예시:
     1. api_search tool로 원하는 API를 찾습니다
-    2. 검색 결과에서 url_main, url_chk를 확인합니다  
+    2. 검색 결과에서 url_main, url_chk를 확인합니다
     3. 이 tool을 사용해서 실제 GitHub 코드를 가져옵니다
     """,
     output_schema={
-        "type": "object", 
+        "type": "object",
         "properties": {
             "status": {
                 "type": "string",
                 "enum": ["success", "partial_success", "error"],
-                "description": "전체 작업 상태"
+                "description": "전체 작업 상태",
             },
-            "message": {
-                "type": "string",
-                "description": "상태 메시지"
-            },
+            "message": {"type": "string", "description": "상태 메시지"},
             "results": {
                 "type": "object",
                 "properties": {
@@ -635,111 +649,125 @@ async def search_etfetn_api(
                         "properties": {
                             "status": {"type": "string"},
                             "message": {"type": "string"},
-                            "content": {"type": "string", "description": "실제 코드 내용"},
-                            "url": {"type": "string"}
-                        }
+                            "content": {
+                                "type": "string",
+                                "description": "실제 코드 내용",
+                            },
+                            "url": {"type": "string"},
+                        },
                     },
                     "check": {
-                        "type": "object", 
+                        "type": "object",
                         "properties": {
                             "status": {"type": "string"},
                             "message": {"type": "string"},
-                            "content": {"type": "string", "description": "실제 코드 내용"},
-                            "url": {"type": "string"}
-                        }
-                    }
+                            "content": {
+                                "type": "string",
+                                "description": "실제 코드 내용",
+                            },
+                            "url": {"type": "string"},
+                        },
+                    },
                 },
-                "description": "각 URL별 코드 가져오기 결과"
-            }
+                "description": "각 URL별 코드 가져오기 결과",
+            },
         },
-        "required": ["status", "message", "results"]
-    }
+        "required": ["status", "message", "results"],
+    },
 )
 async def fetch_api_code(
-    url_main: str,
-    url_chk: str = None,
-    ctx: Context = None
+    url_main: str, url_chk: str = None, ctx: Context = None
 ) -> dict:
     """API URL에서 실제 GitHub 코드를 가져옴 (템플릿 리소스 사용)"""
     results = {}
-    
+
     # 메인 URL 처리
     if url_main:
         params = extract_category_function_from_url(url_main)
         if params:
-            git_uri = f"internal://kis-api/{params['category']}/{params['function_name']}"
+            git_uri = (
+                f"internal://kis-api/{params['category']}/{params['function_name']}"
+            )
             try:
                 # Context를 통해 MCP Resource 직접 호출 (FastMCP 자동 캐싱)
                 resource_result = await ctx.read_resource(git_uri)
                 # MCP resource는 {'content': str, 'mime_type': str} 형태로 반환됨
-                content = resource_result.get('content', '') if isinstance(resource_result, dict) else str(resource_result)
-                
+                content = (
+                    resource_result.get("content", "")
+                    if isinstance(resource_result, dict)
+                    else str(resource_result)
+                )
+
                 results["main"] = {
                     "status": "success",
                     "message": "코드를 성공적으로 가져왔습니다",
                     "content": content,
                     "url": url_main,
-                    "git_uri": git_uri
+                    "git_uri": git_uri,
                 }
             except Exception as e:
                 results["main"] = {
                     "status": "error",
                     "message": f"오류: {str(e)}",
                     "content": "",
-                    "url": url_main
+                    "url": url_main,
                 }
         else:
             results["main"] = {
                 "status": "error",
                 "message": "GitHub URL 형식이 올바르지 않습니다",
                 "content": "",
-                "url": url_main
+                "url": url_main,
             }
-    
-    # 체크 URL 처리  
+
+    # 체크 URL 처리
     if url_chk:
         params = extract_category_function_from_url(url_chk)
         if params:
-            git_uri = f"internal://kis-api-chk/{params['category']}/{params['function_name']}"
+            git_uri = (
+                f"internal://kis-api-chk/{params['category']}/{params['function_name']}"
+            )
             try:
                 # Context를 통해 MCP Resource 직접 호출 (FastMCP 자동 캐싱)
                 resource_result = await ctx.read_resource(git_uri)
                 # MCP resource는 {'content': str, 'mime_type': str} 형태로 반환됨
-                content = resource_result.get('content', '') if isinstance(resource_result, dict) else str(resource_result)
-                
+                content = (
+                    resource_result.get("content", "")
+                    if isinstance(resource_result, dict)
+                    else str(resource_result)
+                )
+
                 results["check"] = {
                     "status": "success",
                     "message": "코드를 성공적으로 가져왔습니다",
                     "content": content,
                     "url": url_chk,
-                    "git_uri": git_uri
+                    "git_uri": git_uri,
                 }
             except Exception as e:
                 results["check"] = {
                     "status": "error",
                     "message": f"오류: {str(e)}",
                     "content": "",
-                    "url": url_chk
+                    "url": url_chk,
                 }
         else:
             results["check"] = {
                 "status": "error",
                 "message": "GitHub URL 형식이 올바르지 않습니다",
                 "content": "",
-                "url": url_chk
+                "url": url_chk,
             }
-    
+
     # 전체 상태 판단
     if not results:
-        return {
-            "status": "error",
-            "message": "제공된 URL이 없습니다",
-            "results": {}
-        }
-    
-    success_count = sum(1 for result in results.values() if result["status"] == "success")
+        return {"status": "error", "message": "제공된 URL이 없습니다", "results": {}}
+
+    success_count = sum(
+        1 for result in results.values() if result["status"] == "success"
+    )
     total_count = len(results)
-    
+
     if success_count == total_count:
         status = "success"
         message = f"모든 코드를 성공적으로 가져왔습니다 ({success_count}/{total_count})"
@@ -749,16 +777,14 @@ async def fetch_api_code(
     else:
         status = "error"
         message = f"모든 코드 가져오기에 실패했습니다 (0/{total_count})"
-    
-    return {
-        "status": status,
-        "message": message,
-        "results": results
-    }
+
+    return {"status": status, "message": message, "results": results}
+
 
 # =============================================================================
 # MAIN APPLICATION
 # =============================================================================
+
 
 def main():
     if "--stdio" in sys.argv:
@@ -773,42 +799,45 @@ def main():
     # Add health check endpoint
     @app.route("/health", methods=["GET"])
     async def health_check(request: Request):
-        return JSONResponse({
-            "status": "healthy",
-            "server": "kis-code-assistant-mcp",
-            "version": "0.1.0",
-            "mcp_capabilities": ["tools", "resources", "prompts"]
-        })
+        return JSONResponse(
+            {
+                "status": "healthy",
+                "server": "kis-code-assistant-mcp",
+                "version": "0.1.0",
+                "mcp_capabilities": ["tools", "resources", "prompts"],
+            }
+        )
 
     # Add readiness check endpoint
     @app.route("/ready", methods=["GET"])
     async def readiness_check(request: Request):
         try:
             # Check if data file exists and searcher is ready
-            if os.path.exists(data_path) and hasattr(searcher, 'search'):
-                return JSONResponse({
-                    "status": "ready",
-                    "message": "All systems operational"
-                })
+            if os.path.exists(data_path) and hasattr(searcher, "search"):
+                return JSONResponse(
+                    {"status": "ready", "message": "All systems operational"}
+                )
             else:
-                return JSONResponse({
-                    "status": "not_ready",
-                    "message": "Data file or searcher not available"
-                }, status_code=503)
+                return JSONResponse(
+                    {
+                        "status": "not_ready",
+                        "message": "Data file or searcher not available",
+                    },
+                    status_code=503,
+                )
         except Exception as e:
-            return JSONResponse({
-                "status": "error",
-                "message": str(e)
-            }, status_code=500)
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
     # Add root endpoint for basic connectivity check
     @app.route("/", methods=["GET"])
     async def root_check(request: Request):
-        return JSONResponse({
-            "name": "한국투자 코딩가이드 MCP (KIS Code Assistant MCP)",
-            "status": "running",
-            "version": "0.1.0"
-        })
+        return JSONResponse(
+            {
+                "name": "한국투자 코딩가이드 MCP (KIS Code Assistant MCP)",
+                "status": "running",
+                "version": "0.1.0",
+            }
+        )
 
     # IMPORTANT: add CORS middleware for browser based clients
     app.add_middleware(
@@ -826,6 +855,7 @@ def main():
     print(f"Listening on port {port}")
 
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
 
 if __name__ == "__main__":
     main()
