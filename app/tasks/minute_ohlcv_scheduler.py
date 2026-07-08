@@ -26,28 +26,23 @@ async def fetch_minute_data(ticker: str, target_date: str, target_time: str) -> 
         "FID_FAKE_TICK_INCU_YN": "N"
     }
 
-    max_retries = 3
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp = await async_kis_fetch(API_URL, TR_ID, "", params)
-            if resp.is_ok():
-                raw_list = resp.get_body().get("output2", [])
-                if not raw_list:
-                    return pd.DataFrame()
-                # DotDict 객체 배열을 pandas에 그대로 넣으면 numpy __array_struct__ 충돌이 발생하므로 순수 dict로 캐스팅
-                pure_list = [dict(row) for row in raw_list]
-                return pd.DataFrame(pure_list)
-            else:
-                logger.error(f"[{ticker}] API Error: {resp.get_error_message()}")
-                return pd.DataFrame()
-        except Exception as e:
-            logger.warning(f"[{ticker}] Fetch Exception (Attempt {attempt}/{max_retries}): {e}")
-            if attempt < max_retries:
-                logger.info(f"[{ticker}] Retrying in 1 second...")
-                await asyncio.sleep(1)
-            else:
-                logger.error(f"[{ticker}] Max retries exceeded.")
-    return pd.DataFrame()
+    resp = await async_kis_fetch(
+        api_url=API_URL,
+        ptr_id=TR_ID,
+        tr_cont="",
+        params=params,
+        priority=7  # 스케줄러 태스크는 실시간 요청보다 약간 낮은 우선순위 할당
+    )
+
+    if resp.is_ok():
+        raw_list = resp.get_body().get("output2", [])
+        if not raw_list:
+            return pd.DataFrame()
+        # DotDict 객체 배열을 pandas에 그대로 넣으면 numpy __array_struct__ 충돌이 발생하므로 순수 dict로 캐스팅
+        pure_list = [dict(row) for row in raw_list]
+        return pd.DataFrame(pure_list)
+
+    raise Exception(f"API Error: {resp.get_error_message()}")
 
 async def process_ticker(ticker: str) -> bool:
     """
@@ -156,29 +151,54 @@ async def run_minute_ohlcv_scheduler(market: str = "KOSPI"):
 
     logger.info(f"Found {len(tickers)} tickers for {market}. Starting Minute fetches...")
 
-    # OCI 1GB RAM 메모리 터짐(OOM) 방지를 위해 세마포어를 일봉(100)보다 보수적인 20으로 설정
-    sem = asyncio.Semaphore(20)
+    # 큐 기반 비동기 워커 생성
+    queue = asyncio.Queue()
+    for ticker in tickers:
+        queue.put_nowait({"ticker": ticker, "requeue_count": 0})
 
     success_count = 0
     fail_count = 0
 
-    async def sem_process(t):
+    async def worker():
         nonlocal success_count, fail_count
-        async with sem:
-            is_success = await process_ticker(t)
-            if is_success:
+        while True:
+            try:
+                item = await queue.get()
+            except asyncio.CancelledError:
+                break
+
+            ticker = item["ticker"]
+            requeue_count = item["requeue_count"]
+
+            try:
+                is_success = await process_ticker(ticker)
+                # 에러 없이 완료되었다면 성공으로 간주 (데이터 없는 신규상장 포함)
                 success_count += 1
-            else:
-                fail_count += 1
 
-            total_processed = success_count + fail_count
-            if total_processed % 100 == 0:
-                logger.info(f"[Progress] Processed {total_processed} minute tickers so far...")
+                total_processed = success_count + fail_count
+                if total_processed % 100 == 0:
+                    logger.info(f"[Progress] Processed {total_processed} minute tickers so far...")
+            except Exception as e:
+                if requeue_count < 5:
+                    item["requeue_count"] += 1
+                    await asyncio.sleep(0.5)  # 실패 시 0.5초 대기 후 재진입 (백오프)
+                    await queue.put(item)
+                else:
+                    logger.error(f"[{ticker}] Completely failed after 5 requeues: {e}")
+                    fail_count += 1
+            finally:
+                queue.task_done()
 
-    tasks = [sem_process(t) for t in tickers]
+    # 분봉은 일봉보다 메모리를 조금 더 쓰므로 워커 수를 50개로 안전하게 타협 설정
+    num_workers = 50
+    workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
 
-    # 모든 태스크 병렬 수행
-    await asyncio.gather(*tasks)
+    # 모든 큐 작업이 끝날 때까지 대기
+    await queue.join()
+
+    # 대기 중인 워커 종료
+    for w in workers:
+        w.cancel()
 
     elapsed_time = datetime.now() - start_time
     logger.info(f"=== Minute OHLCV Scheduler Finished for {market} ===")
@@ -201,7 +221,7 @@ async def start_minute_scheduler_task(market: str = "KOSPI"):
     logger.info("Minute scheduler task started manually via admin route.")
     return True
 
-async def stop_minute_scheduler_task():
+def stop_minute_scheduler_task():
     global _running_minute_scheduler_task
     if _running_minute_scheduler_task is not None and not _running_minute_scheduler_task.done():
         _running_minute_scheduler_task.cancel()
