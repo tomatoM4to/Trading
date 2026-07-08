@@ -12,8 +12,8 @@ logger.setLevel(logging.INFO)
 API_URL = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 TR_ID = "FHKST03010100"  # 국내주식기간별시세
 
-async def fetch_and_save_ohlcv(ticker: str, end_date: datetime, days_to_subtract: int, max_retries: int = 3) -> list[dict]:
-    """특정 종목의 OHLCV 데이터를 KIS API로 조회하여 리스트로 반환 (재시도 로직 포함)"""
+async def fetch_and_save_ohlcv(ticker: str, end_date: datetime, days_to_subtract: int) -> list[dict]:
+    """특정 종목의 OHLCV 데이터를 KIS API로 조회하여 리스트로 반환"""
     start_date = end_date - timedelta(days=days_to_subtract)
 
     params = {
@@ -25,31 +25,18 @@ async def fetch_and_save_ohlcv(ticker: str, end_date: datetime, days_to_subtract
         "FID_ORG_ADJ_PRC": "0"               # 0: 수정주가
     }
 
-    for attempt in range(max_retries):
-        try:
-            resp = await async_kis_fetch(
-                api_url=API_URL,
-                ptr_id=TR_ID,
-                tr_cont="",
-                params=params,
-                priority=7  # 스케줄러 태스크는 실시간 요청보다 약간 낮은 우선순위 할당
-            )
+    resp = await async_kis_fetch(
+        api_url=API_URL,
+        ptr_id=TR_ID,
+        tr_cont="",
+        params=params,
+        priority=7  # 스케줄러 태스크는 실시간 요청보다 약간 낮은 우선순위 할당
+    )
 
-            if resp.is_ok():
-                if attempt > 0:
-                    logger.info(f"[{ticker}] Fetch succeeded on retry {attempt+1}/{max_retries}!")
-                return resp.get_body().output2
+    if resp.is_ok():
+        return resp.get_body().output2
 
-            logger.warning(f"[{ticker}] API Error (Attempt {attempt+1}/{max_retries}): {resp.get_error_message()}")
-        except Exception as e:
-            logger.warning(f"[{ticker}] Fetch Exception (Attempt {attempt+1}/{max_retries}): {e}")
-
-        if attempt < max_retries - 1:
-            logger.info(f"[{ticker}] Retrying in 1 second...")
-            await asyncio.sleep(1)  # 1초 대기 후 재시도
-
-    logger.error(f"[{ticker}] Completely failed to fetch OHLCV after {max_retries} attempts.")
-    return []
+    raise Exception(f"API Error: {resp.get_error_message()}")
 
 async def process_ticker(ticker: str, target_api_calls: int = 5):
     """
@@ -102,8 +89,8 @@ async def process_ticker(ticker: str, target_api_calls: int = 5):
         })
 
     if not processed_data:
-        logger.warning(f"[{ticker}] No valid OHLCV data found. Skipping.")
-        return False
+        logger.info(f"[{ticker}] No valid OHLCV data found. Skipping.")
+        return True
 
     # SQLite에 Bulk UPSERT (INSERT OR REPLACE)
     conn = connect_sqlite()
@@ -121,7 +108,7 @@ async def process_ticker(ticker: str, target_api_calls: int = 5):
         return True
     except Exception as e:
         logger.error(f"[{ticker}] DB Save Error: {e}")
-        return False
+        raise e
     finally:
         conn.close()
 
@@ -146,28 +133,52 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
 
     logger.info(f"Found {len(tickers)} tickers for {market}. Starting fetches...")
 
-    # 병렬 처리를 너무 많이 하면 메모리나 다른 작업에 영향을 줄 수 있으므로 세마포어로 동시성 제어
-    # (Rate Limit 자체는 kis_fetch 큐에서 20req/s로 방어해 주므로 걱정 없음)
-    sem = asyncio.Semaphore(100)
+    # 큐 기반 비동기 워커 생성
+    queue = asyncio.Queue()
+    for ticker in tickers:
+        queue.put_nowait({"ticker": ticker, "requeue_count": 0})
 
     success_count = 0
     fail_count = 0
 
-    async def sem_process(ticker):
+    async def worker():
         nonlocal success_count, fail_count
-        async with sem:
-            is_success = await process_ticker(ticker)
-            if is_success:
+        while True:
+            try:
+                item = await queue.get()
+            except asyncio.CancelledError:
+                break
+
+            ticker = item["ticker"]
+            requeue_count = item["requeue_count"]
+
+            try:
+                await process_ticker(ticker)
                 success_count += 1
                 if success_count % 100 == 0:
                     logger.info(f"[Progress] Successfully saved {success_count} tickers so far...")
-            else:
-                fail_count += 1
+            except Exception as e:
+                if requeue_count < 5:
+                    # logger.warning(f"[{ticker}] Fetch failed ({e}). Requeueing ({requeue_count + 1}/5)...")
+                    item["requeue_count"] += 1
+                    await asyncio.sleep(0.5)  # 실패 시 0.5초 강제 대기 후 재진입
+                    await queue.put(item)
+                else:
+                    logger.error(f"[{ticker}] Completely failed after 5 requeues: {e}")
+                    fail_count += 1
+            finally:
+                queue.task_done()
 
-    tasks = [sem_process(ticker) for ticker in tickers]
+    # 100개의 워커가 큐를 소비
+    num_workers = 100
+    workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
 
-    # gather_with_concurrency (모든 태스크 동시 실행)
-    await asyncio.gather(*tasks)
+    # 모든 작업이 끝날 때까지 대기
+    await queue.join()
+
+    # 작업 완료 후 워커 종료
+    for w in workers:
+        w.cancel()
 
     elapsed_time = datetime.now() - start_time
 

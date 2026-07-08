@@ -20,7 +20,7 @@ async def cancel_daily_ohlcv():
     """
     현재 구동 중인 1일봉 데이터 수집 스케줄러 태스크를 강제로 중지합니다.
     """
-    stopped = await stop_scheduler_task()
+    stopped = stop_scheduler_task()
     if stopped:
         return {"message": "Successfully stopped the running scheduler."}
     else:
@@ -42,7 +42,7 @@ async def cancel_minute_ohlcv():
     """
     현재 구동 중인 분봉 데이터 수집 스케줄러 태스크를 강제로 중지합니다.
     """
-    stopped = await stop_minute_scheduler_task()
+    stopped = stop_minute_scheduler_task()
     if stopped:
         return {"message": "Successfully stopped the running minute scheduler."}
     else:
