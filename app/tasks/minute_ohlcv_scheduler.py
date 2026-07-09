@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 from core.database import connect_sqlite
@@ -93,9 +93,11 @@ async def process_ticker(ticker: str) -> bool:
 
             # 단, 청크의 가장 마지막 행은 shift(-1)이 NaN이라서 is_same_date가 False가 됨.
             # 이 때 acml_amount가 그대로 들어가면 거래대금이 비정상적으로 폭증하는 스파이크가 발생하므로, 마지막 행만 종가*거래량 근사치로 대체
+            # 단, 그 마지막 행이 09:00:00 이라면 누적대금이 곧 해당 분의 정확한 거래대금이므로 대체하지 않음.
             is_last_row = df["stck_bsop_date"].shift(-1).isna()
+            is_0900 = df["stck_cntg_hour"] == "090000"
             df_clean["amount"] = df_clean["amount"].mask(
-                is_last_row, df_clean["close"] * df_clean["volume"]
+                is_last_row & ~is_0900, df_clean["close"] * df_clean["volume"]
             )
         else:
             # 만약 API 스펙 변경으로 누적거래대금이 안 들어온다면 전체를 근사치로 계산
@@ -134,8 +136,17 @@ async def process_ticker(ticker: str) -> bool:
             target_date = df.iloc[100]["stck_bsop_date"]
             target_time = df.iloc[100]["stck_cntg_hour"]
         else:
-            # 가져온 캔들이 100개 이하이면 더 이상 거슬러 올라갈 과거 데이터(신규 상장 등)가 없다는 뜻입니다.
-            break
+            # 가져온 캔들이 100개 이하이면 해당 일자의 09:00:00(장 시작)에 도달했다는 뜻입니다.
+            # KIS API는 주말이나 휴장일 날짜를 입력받아도 자동으로 그 직전 영업일 데이터를 반환하는
+            # 훌륭한 특성이 있으므로, 복잡한 달력 계산 없이 단순히 날짜를 하루(-1일) 빼서 넘기면 됩니다.
+            try:
+                curr_date = datetime.strptime(target_date, "%Y%m%d")
+                prev_date = curr_date - timedelta(days=1)
+                target_date = prev_date.strftime("%Y%m%d")
+                target_time = "153000"
+            except Exception as e:
+                logger.error(f"Failed to calculate previous date for {ticker}: {e}")
+                break
 
     return success_any
 
