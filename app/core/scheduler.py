@@ -97,6 +97,7 @@ class SystemScheduler:
         """종목 마스터 데이터를 갱신하는 스케줄러 Job."""
         # 동적 임포트를 사용하여 순환 참조 방지
         from tasks.init_stock_codes import init_stock_codes_db
+
         try:
             logger.info("Starting scheduled stock codes refresh...")
             await asyncio.to_thread(init_stock_codes_db)

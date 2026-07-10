@@ -1,35 +1,19 @@
-# Implementation Plan: 종목 마스터 심화 필터링 및 단일 스케줄러 구축
+# Plan: Intelligent OHLCV Fetcher 구현
 
-## Overview
-Trading Server의 종목 필터링 로직을 고도화하여 단기과열, 저유동성, 투자주의 환기종목 등 자동매매에 위험한 종목을 사전에 제거합니다. 또한 1 OCPU/1GB RAM 환경의 서버 안정성을 위해 파편화된 스케줄러를 `SystemScheduler` 하나로 통합하여 중앙 집중식으로 배치 작업을 관리합니다.
+## 1. 컴포넌트 분석
+- `app/tasks/daily_ohlcv_scheduler.py` 내부의 `process_ticker` 함수가 타겟입니다.
+- 기존 로직: `target_api_calls = 5` 만큼 무조건 루프를 돔.
+- 변경 로직: DB에서 해당 종목의 `MAX(date)`를 조회한 뒤 루프 종료 조건을 동적으로 제어.
 
-## Architecture Decisions
-- **단일 스케줄러 (SystemScheduler)**: 서버 리소스 한계를 극복하고 OOM을 방지하기 위해 단 하나의 `AsyncIOScheduler` 인스턴스만 유지합니다. 6분의 1분봉 수집 레이턴시는 시스템 단순성을 위해 기꺼이 감수합니다.
-- **매일 08:30 마스터 DB 덮어쓰기**: 당일 아침에 거래정지나 단기과열로 지정된 종목을 타겟 리스트에서 완벽하게 증발시키기 위해 매일 아침 DB를 `replace` 모드로 갱신합니다.
-- **스키마 최적화**: 실시간 조인이 가능하거나 전략적 의미가 없는 `prev_vol`과 `capital`을 저장 시 제거하여 I/O를 최적화합니다.
+## 2. 구현 순서 (Implementation Order)
+1. **DB 조회 로직 추가**: `process_ticker` 시작 시점에 SQLite를 찔러 `SELECT MAX(date) FROM daily_ohlcv WHERE ticker = ?` 실행.
+2. **분기점(Branch) 설계**:
+   - `max_date`가 `None`인 경우 (신규): 기존처럼 `target_api_calls = 5` 유지.
+   - `max_date`가 존재하는 경우 (기존):
+     - `target_api_calls = 5` 로 최대치는 열어두되,
+     - 한 번 API를 호출해서 받아온 캔들 리스트 중 `oldest_date <= max_date` 조건이 만족되면 **더 이상 과거로 갈 필요가 없으므로 `break`**.
+3. **최적화**: DB 커넥션을 2,400번 새로 맺고 끊는 것은 비효율적이므로, 스케줄러 메인 함수(`run_daily_ohlcv_scheduler`)에서 미리 전 종목의 `MAX(date)`를 한 번에 딕셔너리로 조회(Map)하여 큐(Queue)에 담아 워커들에게 분배하는 방식이 압도적으로 빠름.
 
-## Task List
-
-### Phase 1: Foundation (마스터 데이터 필터링)
-- [ ] Task 1: 종목 마스터 심화 필터링 및 컬럼 다이어트 구현
-
-### Checkpoint: Foundation
-- [ ] `stock_codes` 테이블 생성 로직이 문제없이 동작하고 필터링이 올바르게 적용된다.
-- [ ] `trading.db` 내 `stock_codes` 데이터의 컬럼이 축소되었음을 확인한다.
-
-### Phase 2: Centralized Scheduling
-- [ ] Task 2: 중앙 집중형 스케줄러(`SystemScheduler`) 생성
-- [ ] Task 3: 메인 앱과 신규 스케줄러 연동 및 구형 스케줄러 폐기
-
-### Checkpoint: Complete
-- [ ] 서버 기동 시 에러 없이 `SystemScheduler`가 켜진다.
-- [ ] 부팅 직후 `Auth` 잡이 즉시 실행되고, 스케줄 리스트에 08:30(종목 초기화)과 22:00(인증) 잡이 정상적으로 등록된다.
-
-## Risks and Mitigations
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| 마스터 데이터 다운로드 URL 변경/장애 | High | KIS 공식 URL이므로 안정적이나, 다운로드 실패 시 `try-except`로 이전 마스터 데이터를 유지하도록 예외 처리. (기본 내장됨) |
-| 단일 스케줄러 CPU 스파이크 | Med | 08:30 (초기화)와 22:00 (인증) 등 묵직한 작업의 스케줄링 시간대를 완전히 분산시켜 충돌을 방지. |
-
-## Open Questions
-- None. (모든 논의 완료)
+## 3. 리스크 및 완화 전략
+- **리스크**: 상장폐지되거나 KIS API에서 아예 데이터가 응답되지 않는 깡통 종목 무한 루프.
+- **완화**: 응답 데이터(`valid_items`)가 없으면 즉시 `break` 하는 기존 안전장치 유지.

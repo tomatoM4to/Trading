@@ -527,7 +527,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
             placeholders = ",".join(["?"] * len(date_list))
 
             # 4. DB 데이터 조회
-            query = f"SELECT date, open, high, low, close, volume FROM daily_ohlcv WHERE ticker = ? AND date IN ({placeholders})"
+            query = f"SELECT date, open, high, low, close, volume, amount FROM daily_ohlcv WHERE ticker = ? AND date IN ({placeholders})"
             cursor.execute(query, [ticker] + date_list)
             db_rows = {row["date"]: dict(row) for row in cursor.fetchall()}
 
@@ -544,6 +544,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
                 api_low = int(item.stck_lwpr)
                 api_close = int(item.stck_clpr)
                 api_volume = int(item.acml_vol)
+                api_amount = int(item.acml_tr_pbmn)
 
                 db_row = db_rows.get(date_val)
                 if not db_row:
@@ -556,6 +557,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
                     and api_low == db_row["low"]
                     and api_close == db_row["close"]
                     and api_volume == db_row["volume"]
+                    and api_amount == db_row["amount"]
                 ):
                     match_count += 1
                 else:
@@ -572,6 +574,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
                                     "low": api_low,
                                     "close": api_close,
                                     "vol": api_volume,
+                                    "amt": api_amount,
                                 },
                                 "db": {
                                     "open": db_row["open"],
@@ -579,6 +582,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
                                     "low": db_row["low"],
                                     "close": db_row["close"],
                                     "vol": db_row["volume"],
+                                    "amt": db_row["amount"],
                                 },
                             }
                         )

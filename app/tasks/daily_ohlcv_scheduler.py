@@ -42,7 +42,9 @@ async def fetch_and_save_ohlcv(
     raise Exception(f"API Error: {resp.get_error_message()}")
 
 
-async def process_ticker(ticker: str, target_api_calls: int = 5):
+async def process_ticker(
+    ticker: str, last_date: str | None = None, target_api_calls: int = 5
+):
     """
     한 종목에 대해 여러 번 API를 호출하여 충분한 과거 데이터(예: 5번 호출 시 최대 500영업일)를 수집.
     200일 이평선을 과거 시점에서도 계산하려면 최소 400~500 영업일 치의 데이터가 필요함.
@@ -69,6 +71,11 @@ async def process_ticker(ticker: str, target_api_calls: int = 5):
 
         # 가져온 데이터 중 가장 과거 날짜를 찾아서 다음 루프의 end_date로 세팅
         oldest_date_str = min(item.stck_bsop_date for item in valid_items)
+
+        # [스마트 스케줄러] 우리가 가진 DB의 최신 날짜(last_date)와 겹치는 구간(이하)이 확보되면 즉시 과거 역추적 중단
+        if last_date and oldest_date_str <= last_date:
+            break
+
         oldest_date = datetime.strptime(oldest_date_str, "%Y%m%d")
         current_end_date = oldest_date - timedelta(days=1)
 
@@ -91,6 +98,7 @@ async def process_ticker(ticker: str, target_api_calls: int = 5):
                 "low": int(item.stck_lwpr),
                 "close": int(item.stck_clpr),
                 "volume": int(item.acml_vol),
+                "amount": int(item.acml_tr_pbmn),
             }
         )
 
@@ -108,8 +116,8 @@ async def process_ticker(ticker: str, target_api_calls: int = 5):
         cursor = conn.cursor()
         cursor.executemany(
             """
-            INSERT OR REPLACE INTO daily_ohlcv (ticker, date, open, high, low, close, volume)
-            VALUES (:ticker, :date, :open, :high, :low, :close, :volume)
+            INSERT OR REPLACE INTO daily_ohlcv (ticker, date, open, high, low, close, volume, amount)
+            VALUES (:ticker, :date, :open, :high, :low, :close, :volume, :amount)
         """,
             df.to_dict("records"),
         )
@@ -131,10 +139,23 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
 
     conn = connect_sqlite()
     try:
-        # 시장에 해당하는 종목 코드 조회
+        # 1. 시장에 해당하는 종목 코드 조회
         cursor = conn.cursor()
         cursor.execute("SELECT ticker FROM stock_codes WHERE market = ?", (market,))
         tickers = [row["ticker"] for row in cursor.fetchall()]
+
+        # 2. 각 종목별 최신 날짜(MAX date) 일괄 조회 (병목 방지용 메모리 매핑)
+        cursor.execute(
+            """
+            SELECT d.ticker, MAX(d.date) as last_date
+            FROM daily_ohlcv d
+            JOIN stock_codes s ON d.ticker = s.ticker
+            WHERE s.market = ?
+            GROUP BY d.ticker
+        """,
+            (market,),
+        )
+        last_dates = {row["ticker"]: row["last_date"] for row in cursor.fetchall()}
     except Exception as e:
         logger.error(f"Failed to fetch tickers from DB: {e}")
         return
@@ -146,7 +167,9 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
     # 큐 기반 비동기 워커 생성
     queue = asyncio.Queue()
     for ticker in tickers:
-        queue.put_nowait({"ticker": ticker, "requeue_count": 0})
+        queue.put_nowait(
+            {"ticker": ticker, "last_date": last_dates.get(ticker), "requeue_count": 0}
+        )
 
     success_count = 0
     fail_count = 0
@@ -160,10 +183,11 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
                 break
 
             ticker = item["ticker"]
+            last_date = item["last_date"]
             requeue_count = item["requeue_count"]
 
             try:
-                await process_ticker(ticker)
+                await process_ticker(ticker, last_date)
                 success_count += 1
                 if success_count % 100 == 0:
                     logger.info(

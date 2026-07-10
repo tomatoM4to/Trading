@@ -1,58 +1,24 @@
-# Spec: 종목 마스터 심화 필터링 및 단일 중앙 스케줄러 시스템
+# Spec: Intelligent OHLCV Fetching Strategy (일봉 스마트 스케줄러)
 
-## 1. Objective
-단기 돌파(Breakout) 매매 자동화 봇의 안정성을 극대화하기 위해, 시스템 구조를 극도로 단순하고 견고하게 유지합니다. 
-- **유니버스 정제**: 2,500개의 전수 검사 대상 중 거래정지, 관리종목, 단기과열, 저유동성, 환기종목 등 자동매매에 치명적인 종목을 원천 배제합니다.
-- **아키텍처 확립**: Oracle Cloud(1 OCPU, 1GB RAM)의 한계를 고려하여, 복잡한 다중 스케줄러나 핫리스트(Hotlist) 동적 갱신 로직을 배제하고 **단일 스케줄러(SystemScheduler)**와 단일 큐(Queue) 체제를 채택합니다.
-- **Trade-off 수용**: 2,500개 종목을 단일 큐로 순회 시 발생하는 **6분의 레이턴시는 시스템의 단순성과 안정성을 위해 적극적으로 수용**하며, 이를 노이즈(휩소) 필터링의 수단으로 활용하는 묵직한 Breakout 전략을 지향합니다.
+## Objective
+기존 일봉 스케줄러는 매번 모든 종목에 대해 5번(약 500일)씩 과거 데이터를 무식하게 긁어오는(Brute-force) 방식이었습니다. 이를 개선하여:
+1. **완전 신규 종목 (DB에 없음)**: 과거 500일 치를 모두 가져온다. (초기 적재)
+2. **기존 종목 (N일 누락/이빨 빠짐)**: DB에 저장된 가장 최신 날짜(`MAX(date)`)를 확인하고, **오늘부터 `MAX(date)`까지만** 지능적으로 거슬러 올라가며 부족한 캔들만 채워 넣습니다.
+이를 통해 API 호출량을 극단적으로 줄이고 스케줄러 수행 시간을 대폭 단축합니다.
 
-## 2. Tech Stack
-- Python 3.12+ (FastAPI)
-- pandas (데이터 정제)
-- sqlite3 (로컬 DB 저장)
-- apscheduler (중앙 스케줄링)
+## Assumptions (가정사항)
+1. **이빨 빠짐은 "최신 구간"에만 존재한다**: 과거 데이터(예: 200일 전) 중간에 빵꾸가 뚫려있는 경우는 없다고 가정하며, 항상 `MAX(date)`를 기준으로 빈 구간을 채웁니다. (만약 거래정지로 인한 빵꾸라면 KIS API 자체가 해당 일자를 반환하지 않으므로 무시됩니다).
+2. **초과 수집 분은 UPSERT로 덮어씀**: KIS API는 한 번 호출에 최대 100일을 반환하므로, 하루치만 필요해도 100개가 올 수 있습니다. 겹치는 구간은 `INSERT OR REPLACE`로 안전하게 덮어써서 최신 수정주가를 반영합니다.
 
-## 3. Commands
-- Linter/Formatter: `uv run ruff check . --fix && uv run ruff format .`
-- Dev Server: `uv run fastapi dev app/main.py`
+## Tech Stack
+- Python, asyncio, SQLite, Pandas
 
-## 4. Project Structure
-```text
-app/
- ├── tasks/
- │    ├── init_stock_codes.py  # (수정) KIS 마스터 파일 기반 심화 필터링 적용
- ├── core/
- │    ├── database.py          # (수정) 불필요한 스키마 컬럼(prev_vol, capital) 제거
- │    ├── scheduler.py         # (생성) 기존 auth_scheduler를 확장한 중앙 스케줄러 (SystemScheduler)
- ├── main.py                   # (수정) SystemScheduler 등록 및 구형 스케줄러 제거
-```
+## Success Criteria
+- [ ] DB에 해당 종목 데이터가 없으면 API를 최대 5회(약 500일) 호출하여 전체 역추적한다.
+- [ ] DB에 해당 종목의 `MAX(date)`가 존재하면, 오늘부터 역추적하되 API 응답의 가장 오래된 날짜가 `MAX(date)`보다 작거나 같아지는 순간 **즉시 API 루프를 중단(break)**한다.
+- [ ] 매일 장 마감 후 구동 시, 대부분의 종목은 단 1회의 API 호출만으로 업데이트가 완료되어야 한다.
 
-## 5. Code Style
-```python
-# 필터링은 Pandas boolean indexing을 연속적으로 체이닝하여 명확성을 높임
-# 30분 단일가 매매 종목 차단 (단기과열)
-kpi = kpi[kpi["단기과열"].str.strip() == "0"]
-
-# 10분 단일가 매매 종목 차단 (저유동성)
-kpi = kpi[kpi["저유동성"].str.strip() != "Y"]
-```
-
-## 6. Testing Strategy
-- 수동 검증: 서버 구동 후 `trading.db`의 `stock_codes` 테이블 로우 개수가 기존(약 2500개)에서 심화 필터링 적용 후 유의미하게 감소했는지 DB 툴로 확인.
-- 스케줄러 검증: `SystemScheduler`가 서버 부팅 시 1회 즉시 실행되고, 매일 22:00(인증) 및 08:30(종목 초기화)에 정상 예약되는지 로깅 확인.
-
-## 7. Boundaries
-- **Always**: 마스터 파일(`.mst`) 갱신 시 `sqlite3` 트랜잭션을 사용하여 원자적(`replace`)으로 덮어씁니다.
-- **Always**: 스케줄러 인스턴스는 오직 `core.scheduler.SystemScheduler` 하나만 존재해야 하며 싱글톤으로 관리됩니다.
-- **Ask first**: Pandas DataFrame의 다른 신규 컬럼을 DB 스키마에 추가할 때 사용자에게 의도 확인.
-- **Never**: `daily_ohlcv` 등 타 테이블의 과거 데이터를 임의로 삭제하지 않습니다.
-- **Never**: 6분의 레이턴시를 줄이기 위해 워커 스레드를 늘리거나 스케줄러를 분할하는 최적화를 시도하지 않습니다. (안정성 최우선)
-
-## 8. Success Criteria
-1. `init_stock_codes.py` 내에 코스피/코스닥 각각 `단기과열`, `저유동성`, `환기종목` 필터링 로직이 추가된다.
-2. `prev_vol`과 `capital` 컬럼이 `stock_codes` 테이블 저장 시 제외된다.
-3. 매일 오전 08:30에 마스터 DB가 덮어쓰기로 자동 갱신되는 `SystemScheduler`가 동작한다.
-
-## 9. Open Questions
-- (해결됨) 스케줄러 통합 여부 -> 중앙 집중형(Centralized) 단일 스케줄러로 확정.
-- (해결됨) 6분 레이턴시 수용 여부 -> 시스템 단순성을 위해 기꺼이 수용하기로 확정.
+## Boundaries
+- Always: KIS API Rate Limit(150ms) 준수, 에러 발생 시 Re-queue
+- Ask first: DB 스키마 추가 변경
+- Never: 기존 데이터 통째로 삭제 후 재적재 (DELETE 금지)
