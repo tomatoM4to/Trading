@@ -103,7 +103,7 @@ async def process_ticker(
         )
 
     if not processed_data:
-        logger.info(f"[{ticker}] No valid OHLCV data found. Skipping.")
+        logger.sched(f"[{ticker}] No valid OHLCV data found. Skipping.")
         return True
 
     # SQLite에 Bulk UPSERT (INSERT OR REPLACE)
@@ -135,7 +135,7 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
     지정된 시장의 모든 종목의 일봉 데이터를 수집하는 스케줄러.
     """
     start_time = datetime.now()
-    logger.info(f"Starting Daily OHLCV Scheduler for {market}...")
+    logger.sched(f"Starting Daily OHLCV Scheduler for {market}...")
 
     conn = connect_sqlite()
     try:
@@ -162,7 +162,7 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
     finally:
         conn.close()
 
-    logger.info(f"Found {len(tickers)} tickers for {market}. Starting fetches...")
+    logger.sched(f"Found {len(tickers)} tickers for {market}. Starting fetches...")
 
     # 큐 기반 비동기 워커 생성
     queue = asyncio.Queue()
@@ -190,7 +190,7 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
                 await process_ticker(ticker, last_date)
                 success_count += 1
                 if success_count % 100 == 0:
-                    logger.info(
+                    logger.sched(
                         f"[Progress] Successfully saved {success_count} tickers so far..."
                     )
             except Exception as e:
@@ -218,12 +218,12 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
 
     elapsed_time = datetime.now() - start_time
 
-    logger.info(f"=== Daily OHLCV Scheduler Finished for {market} ===")
-    logger.info(f"Total Attempted: {len(tickers)}")
-    logger.info(f"Total SUCCESS: {success_count}")
-    logger.info(f"Total FAILED: {fail_count}")
-    logger.info(f"Elapsed Time: {elapsed_time}")
-    logger.info("=====================================================")
+    logger.sched(f"=== Daily OHLCV Scheduler Finished for {market} ===")
+    logger.sched(f"Total Attempted: {len(tickers)}")
+    logger.sched(f"Total SUCCESS: {success_count}")
+    logger.sched(f"Total FAILED: {fail_count}")
+    logger.sched(f"Elapsed Time: {elapsed_time}")
+    logger.sched("=====================================================")
 
 
 _running_scheduler_task: asyncio.Task | None = None
@@ -238,7 +238,7 @@ async def start_scheduler_task(market: str = "KOSPI"):
 
     loop = asyncio.get_running_loop()
     _running_scheduler_task = loop.create_task(run_daily_ohlcv_scheduler(market))
-    logger.info("Scheduler task started manually via admin route.")
+    logger.sched("Scheduler task started manually via admin route.")
     return True
 
 
@@ -247,6 +247,6 @@ def stop_scheduler_task():
     global _running_scheduler_task
     if _running_scheduler_task is not None and not _running_scheduler_task.done():
         _running_scheduler_task.cancel()
-        logger.info("Scheduler task cancelled manually via admin route.")
+        logger.sched("Scheduler task cancelled manually via admin route.")
         return True
     return False

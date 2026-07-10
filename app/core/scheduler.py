@@ -69,7 +69,7 @@ class SystemScheduler:
         # 서버 부팅 직후 인증 상태를 보장하기 위해 즉시 1회 수행
         self._bg_auth_task = asyncio.create_task(self.refresh_auth_job(force=True))
         self._is_running = True
-        logger.info("System scheduler started")
+        logger.sched("System scheduler started")
 
     def stop(self) -> None:
         """스케줄러와 백그라운드 태스크를 종료한다."""
@@ -81,13 +81,13 @@ class SystemScheduler:
 
         self.scheduler.shutdown(wait=False)
         self._is_running = False
-        logger.info("System scheduler stopped")
+        logger.sched("System scheduler stopped")
 
     async def refresh_auth_job(self, force: bool = False) -> None:
         """실제 인증 작업을 수행하는 스케줄러 Job."""
         try:
             await asyncio.to_thread(auth)
-            logger.info("Background auth refresh completed (force=%s)", force)
+            logger.sched("Background auth refresh completed (force=%s)", force)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -99,9 +99,9 @@ class SystemScheduler:
         from tasks.init_stock_codes import init_stock_codes_db
 
         try:
-            logger.info("Starting scheduled stock codes refresh...")
+            logger.sched("Starting scheduled stock codes refresh...")
             await asyncio.to_thread(init_stock_codes_db)
-            logger.info("Scheduled stock codes refresh completed.")
+            logger.sched("Scheduled stock codes refresh completed.")
         except asyncio.CancelledError:
             raise
         except Exception as e:

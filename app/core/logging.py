@@ -5,6 +5,15 @@ from rich.console import Console
 from rich.highlighter import RegexHighlighter
 from rich.logging import RichHandler
 
+SCHED_LEVEL = 25
+logging.addLevelName(SCHED_LEVEL, "SCHED")
+
+def sched(self, message, *args, **kws):
+    if self.isEnabledFor(SCHED_LEVEL):
+        self._log(SCHED_LEVEL, message, args, **kws)
+
+logging.Logger.sched = sched
+
 
 class LogCategoryFilter(logging.Filter):
     """Attach a category tag to each log record based on logger name."""
