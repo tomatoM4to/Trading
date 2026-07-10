@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -17,19 +18,14 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Application starting up...")
 
-    from tasks.init_stock_codes import init_stock_codes_db
+    from core.bootstrap import run_bootstrap_pipeline
 
     # DB 연결성 확인 및 초기화
     try:
         init_sqlite_connection()
         logger.info("Database connection validated")
-
-        # 종목 리스트 초기화 (KOSPI, KOSDAQ 마스터 파일 다운로드 및 DB 저장)
-        init_stock_codes_db()
     except Exception as e:
-        logger.error(
-            "Failed to connect to the database or initialize stock codes: %s", e
-        )
+        logger.error("Failed to connect to the database: %s", e)
         raise e
 
     system_scheduler = SystemScheduler()
@@ -37,6 +33,9 @@ async def lifespan(app: FastAPI):
 
     # KIS API Rate Limit 제어 워커 백그라운드 구동
     await start_q_worker()
+
+    # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
+    asyncio.create_task(run_bootstrap_pipeline())
 
     yield  # Application runs here
 

@@ -1,24 +1,29 @@
-# Spec: Intelligent OHLCV Fetching Strategy (일봉 스마트 스케줄러)
+# Spec: Application Bootstrap Pipeline (자동 초기화 파이프라인)
 
 ## Objective
-기존 일봉 스케줄러는 매번 모든 종목에 대해 5번(약 500일)씩 과거 데이터를 무식하게 긁어오는(Brute-force) 방식이었습니다. 이를 개선하여:
-1. **완전 신규 종목 (DB에 없음)**: 과거 500일 치를 모두 가져온다. (초기 적재)
-2. **기존 종목 (N일 누락/이빨 빠짐)**: DB에 저장된 가장 최신 날짜(`MAX(date)`)를 확인하고, **오늘부터 `MAX(date)`까지만** 지능적으로 거슬러 올라가며 부족한 캔들만 채워 넣습니다.
-이를 통해 API 호출량을 극단적으로 줄이고 스케줄러 수행 시간을 대폭 단축합니다.
+빈 DB로 서버를 시작했을 때, 여러 스케줄러(일봉, 분봉, 수급 등)가 동시에 API를 호출하여 Rate Limit을 초과하거나 엉키는 문제를 방지합니다. 
+FastAPI 서버가 켜지면 **백그라운드에서 순차적으로(Sequentially) 비어있는 DB를 감지하고 채우는 파이프라인**을 구축합니다.
 
-## Assumptions (가정사항)
-1. **이빨 빠짐은 "최신 구간"에만 존재한다**: 과거 데이터(예: 200일 전) 중간에 빵꾸가 뚫려있는 경우는 없다고 가정하며, 항상 `MAX(date)`를 기준으로 빈 구간을 채웁니다. (만약 거래정지로 인한 빵꾸라면 KIS API 자체가 해당 일자를 반환하지 않으므로 무시됩니다).
-2. **초과 수집 분은 UPSERT로 덮어씀**: KIS API는 한 번 호출에 최대 100일을 반환하므로, 하루치만 필요해도 100개가 올 수 있습니다. 겹치는 구간은 `INSERT OR REPLACE`로 안전하게 덮어써서 최신 수정주가를 반영합니다.
+## Architecture & Workflow
+FastAPI의 `lifespan` 훅에서 서버 응답을 블로킹하지 않도록 `asyncio.create_task()`로 백그라운드 부트스트랩을 던집니다.
+부트스트랩 파이프라인의 순서는 다음과 같습니다:
 
-## Tech Stack
-- Python, asyncio, SQLite, Pandas
+1. **Step 1: 마스터 데이터 (stock_codes)**
+   - `SELECT COUNT(*) FROM stock_codes` 확인.
+   - 0개면 `init_stock_codes.py` 실행 후 완료까지 대기(`await`).
+2. **Step 2: 일봉 데이터 (daily_ohlcv)**
+   - `SELECT COUNT(*) FROM daily_ohlcv` 확인.
+   - 100개 미만이면 `run_daily_ohlcv_scheduler()` 실행 후 완료까지 대기(`await`).
+3. **Step 3: 분봉 데이터 (minute_ohlcv)** *(추후 연동)*
+   - 일봉 완료 후 검사 및 실행.
+4. **Step 4: 수급 데이터 (daily_investors)** *(추후 연동)*
+   - 분봉 완료 후 검사 및 실행.
 
 ## Success Criteria
-- [ ] DB에 해당 종목 데이터가 없으면 API를 최대 5회(약 500일) 호출하여 전체 역추적한다.
-- [ ] DB에 해당 종목의 `MAX(date)`가 존재하면, 오늘부터 역추적하되 API 응답의 가장 오래된 날짜가 `MAX(date)`보다 작거나 같아지는 순간 **즉시 API 루프를 중단(break)**한다.
-- [ ] 매일 장 마감 후 구동 시, 대부분의 종목은 단 1회의 API 호출만으로 업데이트가 완료되어야 한다.
+- [ ] 서버 기동 시 DB가 비어있으면 마스터 -> 일봉 -> (분봉) 순으로 차례대로 적재된다.
+- [ ] 파이프라인이 도는 중에도 FastAPI 서버는 정상적으로 켜져서 API(`/admin/...` 등) 응답이 가능하다.
+- [ ] 이미 데이터가 채워져 있는 경우(예: 서버 단순 재시작), 각 Step은 `COUNT(*)` 검사만 하고 0.01초 만에 즉시 통과(Skip)한다.
 
 ## Boundaries
-- Always: KIS API Rate Limit(150ms) 준수, 에러 발생 시 Re-queue
-- Ask first: DB 스키마 추가 변경
-- Never: 기존 데이터 통째로 삭제 후 재적재 (DELETE 금지)
+- Always: KIS API Rate Limit을 위해 각 Step은 반드시 `await`로 완전 종료를 확인한 뒤 다음 Step으로 넘어간다.
+- Ask first: FastAPI `main.py`의 구조를 크게 변경하는 경우.
