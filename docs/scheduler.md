@@ -15,7 +15,15 @@
 
 ---
 
-## 2. Global Rate-Limiting Queue Worker
+## 2. 서버 부트스트랩 파이프라인 (Bootstrap Pipeline)
+
+서버 최초 구동 시 DB가 텅 비어있거나, 장기간 서버가 꺼져 있어 대규모 데이터 적재가 필요할 때 FastAPI 응답을 블로킹하지 않도록 설계된 백그라운드 초기화 자동화 시스템입니다.
+- **비동기 Non-blocking**: `main.py`의 `lifespan` 훅 안에서 `asyncio.create_task`로 던져져 백그라운드에서 순차적으로(`await`) 동작하며, 그 사이에도 API 요청(`/admin/...` 등)은 정상적으로 응답(200 OK)합니다.
+- **순차 실행 (Sequential Execution)**: KIS API Rate Limit과 DB 락을 회피하기 위해 반드시 `마스터 종목 세팅 -> 일봉 500일 적재 -> 분봉 적재(예정) -> 수급 적재(예정)` 순으로 완전 종료 후 다음 단계로 넘어갑니다.
+
+---
+
+## 3. Global Rate-Limiting Queue Worker
 
 KIS API는 초당 20건 이상의 API 호출 발생 시 IP 차단(`EGW00201` 에러)이라는 치명적인 제재를 가합니다. 이를 원천 봉쇄하기 위해 애플리케이션 레벨의 전역 비동기 큐(`asyncio.Queue`)를 운용합니다.
 
@@ -40,6 +48,7 @@ Zero-Latency 아키텍처를 달성하기 위해, 우리는 핫리스트 종목�
 
 ---
 
-## 4. OOM(Out of Memory) 방지용 동적 동시성 제어
+## 5. OOM(Out of Memory) 방지 및 성능 최적화
+- **스마트 조기 종료 (Smart Early Termination)**: 매번 500일 치를 맹목적으로 가져오는 것을 막기 위해, 수집 시작 전 DB에서 각 종목별 `MAX(date)`를 미리 해시맵(Dict)에 매핑해둡니다. API 응답의 과거 날짜가 이 `MAX(date)`와 겹치는 순간 더 이상의 과거 추적 루프(`for`문)를 즉시 `break` 처리하여 불필요한 API 호출을 0으로 만듭니다.
 - **Daily 워커 (100개)**: 일봉 탐색은 한 번에 100일 치를 가져오며 비동기 I/O 대기시간이 깁니다. 따라서 100개의 워커 Task를 띄워 점진적으로(Max 5회 루프) 과거를 탐색합니다.
 - **Minute 워커 (50개)**: 분봉 탐색은 반환되는 JSON 데이터 크기가 일봉에 비해 훨씬 무겁습니다. 메모리 폭발을 막기 위해 워커 수를 절반(50개)으로 줄여 파이프라인을 구동합니다.

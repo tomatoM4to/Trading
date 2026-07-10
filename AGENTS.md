@@ -32,7 +32,11 @@
 - **주요 라이브러리**: `apscheduler`, `requests`, `pandas`, `uvicorn` 등
 - **패키지 관리**: `uv` (`pyproject.toml`, `uv.lock`)
 
-## 3. 실행 방법 (Run & Debug)
+## 3. 로깅 체계 (Logging System)
+- 일반적인 앱 상태 변경(INFO)과 백그라운드 스케줄러 작업 상태(SCHED)를 명확히 분리하여 콘솔 가독성을 극대화합니다.
+- `logger.sched(...)` 라는 커스텀 레벨(Level 25)을 사용하여 스케줄러 작동 로그에 `[SCHED]` 태그를 시각적으로 강조합니다.
+
+## 4. 실행 방법 (Run & Debug)
 - **백엔드 디버그 모드 실행**:
   ```bash
   uv run fastapi dev app/main.py
