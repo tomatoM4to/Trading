@@ -8,9 +8,11 @@ from rich.logging import RichHandler
 SCHED_LEVEL = 25
 logging.addLevelName(SCHED_LEVEL, "SCHED")
 
+
 def sched(self, message, *args, **kws):
     if self.isEnabledFor(SCHED_LEVEL):
         self._log(SCHED_LEVEL, message, args, **kws)
+
 
 logging.Logger.sched = sched
 

@@ -14,7 +14,7 @@ TR_ID = "FHKST03010100"  # 국내주식기간별시세
 
 
 async def fetch_and_save_ohlcv(
-    ticker: str, end_date: datetime, days_to_subtract: int
+    ticker: str, end_date: datetime, days_to_subtract: int, priority: int = 7
 ) -> list[dict]:
     """특정 종목의 OHLCV 데이터를 KIS API로 조회하여 리스트로 반환"""
     start_date = end_date - timedelta(days=days_to_subtract)
@@ -33,7 +33,7 @@ async def fetch_and_save_ohlcv(
         ptr_id=TR_ID,
         tr_cont="",
         params=params,
-        priority=7,  # 스케줄러 태스크는 실시간 요청보다 약간 낮은 우선순위 할당
+        priority=priority,  # 스케줄러 태스크는 7, 관리자/사용자 호출은 높은 우선순위 할당
     )
 
     if resp.is_ok():

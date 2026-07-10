@@ -21,7 +21,9 @@ async def run_bootstrap_pipeline():
     conn = connect_sqlite()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_codes'")
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_codes'"
+        )
         if cursor.fetchone():
             cursor.execute("SELECT COUNT(*) FROM stock_codes")
             stock_count = cursor.fetchone()[0]
@@ -42,7 +44,9 @@ async def run_bootstrap_pipeline():
             logger.error(f"[Bootstrap] Failed to initialize stock_codes: {e}")
             return  # 마스터 데이터가 없으면 뒤의 작업도 불가능하므로 중단
     else:
-        logger.sched(f"[Bootstrap] stock_codes already exists ({stock_count} rows). Skipping.")
+        logger.sched(
+            f"[Bootstrap] stock_codes already exists ({stock_count} rows). Skipping."
+        )
 
     # 2. 일봉 데이터 (daily_ohlcv)
     # KOSPI, KOSDAQ 순차 실행
@@ -53,7 +57,7 @@ async def run_bootstrap_pipeline():
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT COUNT(*) FROM daily_ohlcv d JOIN stock_codes s ON d.ticker = s.ticker WHERE s.market = ?",
-                (market,)
+                (market,),
             )
             ohlcv_count = cursor.fetchone()[0]
         except Exception as e:
@@ -63,15 +67,21 @@ async def run_bootstrap_pipeline():
 
         # 데이터가 비어있거나, 종목 수보다 터무니없이 적을 경우 초기화 대상
         if ohlcv_count < 100:
-            logger.sched(f"[Bootstrap] daily_ohlcv for {market} seems empty ({ohlcv_count} rows). Initializing...")
+            logger.sched(
+                f"[Bootstrap] daily_ohlcv for {market} seems empty ({ohlcv_count} rows). Initializing..."
+            )
             try:
                 # 여기서 await를 걸었기 때문에, 일봉 적재가 완전히 끝날 때까지 다음 단계로 안 넘어감
                 await run_daily_ohlcv_scheduler(market)
                 logger.sched(f"[Bootstrap] daily_ohlcv for {market} initialized.")
             except Exception as e:
-                logger.error(f"[Bootstrap] Failed to initialize daily_ohlcv for {market}: {e}")
+                logger.error(
+                    f"[Bootstrap] Failed to initialize daily_ohlcv for {market}: {e}"
+                )
         else:
-            logger.sched(f"[Bootstrap] daily_ohlcv for {market} already exists ({ohlcv_count} rows). Skipping.")
+            logger.sched(
+                f"[Bootstrap] daily_ohlcv for {market} already exists ({ohlcv_count} rows). Skipping."
+            )
 
     # 3. 분봉 데이터 (추후 연동)
     # 4. 수급 데이터 (추후 연동)

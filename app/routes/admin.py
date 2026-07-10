@@ -1,63 +1,8 @@
 from fastapi import APIRouter, HTTPException
-from tasks.daily_ohlcv_scheduler import start_scheduler_task, stop_scheduler_task
-from tasks.minute_ohlcv_scheduler import (
-    start_minute_scheduler_task,
-    stop_minute_scheduler_task,
-)
 
 router = APIRouter()
 daily_router = APIRouter(prefix="/admin/daily", tags=["Admin (Daily OHLCV)"])
 minute_router = APIRouter(prefix="/admin/minute", tags=["Admin (Minute OHLCV)"])
-
-
-@daily_router.post("/start")
-async def trigger_daily_ohlcv(market: str = "KOSPI"):
-    """
-    KOSPI 또는 KOSDAQ 종목들의 1일봉(OHLCV) 데이터를 200일 치 수집하는 백그라운드 태스크를 강제 시작합니다.
-    """
-    started = await start_scheduler_task(market)
-    if started:
-        return {"message": f"Successfully started daily OHLCV scheduler for {market}."}
-    else:
-        raise HTTPException(status_code=400, detail="Scheduler is already running.")
-
-
-@daily_router.post("/stop")
-async def cancel_daily_ohlcv():
-    """
-    현재 구동 중인 1일봉 데이터 수집 스케줄러 태스크를 강제로 중지합니다.
-    """
-    stopped = stop_scheduler_task()
-    if stopped:
-        return {"message": "Successfully stopped the running scheduler."}
-    else:
-        return {"message": "No running scheduler found to stop."}
-
-
-@minute_router.post("/start")
-async def trigger_minute_ohlcv(market: str = "KOSPI"):
-    """
-    KOSPI 또는 KOSDAQ 종목들의 분봉(OHLCV) 데이터를 수집하는 백그라운드 태스크를 강제 시작합니다.
-    """
-    started = await start_minute_scheduler_task(market)
-    if started:
-        return {"message": f"Successfully started minute OHLCV scheduler for {market}."}
-    else:
-        raise HTTPException(
-            status_code=400, detail="Minute scheduler is already running."
-        )
-
-
-@minute_router.post("/stop")
-async def cancel_minute_ohlcv():
-    """
-    현재 구동 중인 분봉 데이터 수집 스케줄러 태스크를 강제로 중지합니다.
-    """
-    stopped = stop_minute_scheduler_task()
-    if stopped:
-        return {"message": "Successfully stopped the running minute scheduler."}
-    else:
-        return {"message": "No running minute scheduler found to stop."}
 
 
 @daily_router.get("/check")
@@ -302,9 +247,11 @@ async def verify_minute_integrity(sample_size: int = 10, market: str = "KOSPI"):
             target_date = latest_row["date"]
             target_time = latest_row["time"]
 
-            # 3. KIS API 호출 (DB의 최신 시점부터 과거 120개)
+            # 3. KIS API 호출 (DB의 최신 시점부터 과거 120개) - VIP 우선순위(2) 적용
             try:
-                api_df = await fetch_minute_data(ticker, target_date, target_time)
+                api_df = await fetch_minute_data(
+                    ticker, target_date, target_time, priority=2
+                )
             except Exception as e:
                 results.append(
                     {
@@ -491,7 +438,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
             try:
                 # days_to_subtract를 150으로 주어 주말/휴일 감안하더라도 KIS API 최대치인 100개를 받아옴
                 api_data = await fetch_and_save_ohlcv(
-                    ticker, end_date, days_to_subtract=150
+                    ticker, end_date, days_to_subtract=150, priority=2
                 )
             except Exception as e:
                 results.append(

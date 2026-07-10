@@ -14,7 +14,7 @@ TR_ID = "FHKST03010230"
 
 
 async def fetch_minute_data(
-    ticker: str, target_date: str, target_time: str
+    ticker: str, target_date: str, target_time: str, priority: int = 7
 ) -> pd.DataFrame:
     """
     KIS API를 통해 최대 120개의 1분봉 데이터를 가져옵니다.
@@ -33,7 +33,7 @@ async def fetch_minute_data(
         ptr_id=TR_ID,
         tr_cont="",
         params=params,
-        priority=7,  # 스케줄러 태스크는 실시간 요청보다 약간 낮은 우선순위 할당
+        priority=priority,  # 스케줄러 태스크는 7, 관리자/사용자 호출은 높은 우선순위 할당
     )
 
     if resp.is_ok():
