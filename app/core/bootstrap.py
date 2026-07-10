@@ -21,8 +21,12 @@ async def run_bootstrap_pipeline():
     conn = connect_sqlite()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM stock_codes")
-        stock_count = cursor.fetchone()[0]
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_codes'")
+        if cursor.fetchone():
+            cursor.execute("SELECT COUNT(*) FROM stock_codes")
+            stock_count = cursor.fetchone()[0]
+        else:
+            stock_count = 0
     except Exception as e:
         logger.error(f"Failed to check stock_codes: {e}")
     finally:

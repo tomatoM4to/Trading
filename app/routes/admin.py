@@ -536,6 +536,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
             mismatch_count = 0
             missing_in_db_count = 0
             mismatch_details = []
+            missing_dates = []
 
             for item in valid_api_items:
                 date_val = item.stck_bsop_date
@@ -549,6 +550,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
                 db_row = db_rows.get(date_val)
                 if not db_row:
                     missing_in_db_count += 1
+                    missing_dates.append(date_val)
                     continue
 
                 if (
@@ -604,6 +606,7 @@ async def verify_daily_integrity(sample_size: int = 10, market: str = "KOSPI"):
                     "matches": match_count,
                     "mismatches": mismatch_count,
                     "missing_in_db": missing_in_db_count,
+                    "missing_dates": missing_dates,
                     "status": status,
                     "mismatch_sample": mismatch_details,
                 }
