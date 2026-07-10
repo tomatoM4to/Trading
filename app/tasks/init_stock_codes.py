@@ -55,15 +55,15 @@ def init_stock_codes_db():
     kpi = kpi[kpi["관리종목"].str.strip() != "Y"]
     kpi = kpi[kpi["SPAC"].str.strip() != "Y"]
     kpi = kpi[kpi["우선주"].str.strip() == "0"]
+    kpi = kpi[kpi["단기과열"].str.strip() == "0"]
+    kpi = kpi[kpi["저유동성"].str.strip() != "Y"]
 
     kpi_cols = {
         "단축코드": "ticker",
         "한글명": "name",
         "market": "market",
-        "전일거래량": "prev_vol",
         "시가총액": "market_cap",
         "상장주수": "total_shares",
-        "자본금": "capital",
         "신용가능": "credit_able",
         "증거금비율": "margin_rate",
     }
@@ -77,15 +77,16 @@ def init_stock_codes_db():
     kdq = kdq[kdq["관리 종목 여부"].str.strip() != "Y"]
     kdq = kdq[kdq["기업인수목적회사여부"].str.strip() != "Y"]
     kdq = kdq[kdq["우선주 구분 코드"].str.strip() == "0"]
+    kdq = kdq[kdq["단기과열종목구분코드"].str.strip() == "0"]
+    kdq = kdq[kdq["저유동성종목 여부"].str.strip() != "Y"]
+    kdq = kdq[kdq["(코스닥)투자주의환기종목여부"].str.strip() != "Y"]
 
     kdq_cols = {
         "단축코드": "ticker",
         "한글종목명": "name",
         "market": "market",
-        "전일 거래량": "prev_vol",
         "전일기준 시가총액 (억)": "market_cap",
         "상장 주수(천)": "total_shares",
-        "자본금": "capital",
         "신용주문 가능 여부": "credit_able",
         "증거금 비율": "margin_rate",
     }
@@ -94,7 +95,7 @@ def init_stock_codes_db():
     combined_df = pd.concat([kpi, kdq], ignore_index=True)
 
     # 숫자형 데이터 변환
-    numeric_cols = ["prev_vol", "market_cap", "total_shares", "capital", "margin_rate"]
+    numeric_cols = ["market_cap", "total_shares", "margin_rate"]
     for col in numeric_cols:
         combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce").fillna(0)
 
