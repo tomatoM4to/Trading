@@ -22,6 +22,7 @@
 ## 1. 개요 (Overview)
 - **프로젝트명**: Trading Server
 - **목적**: KIS OpenAPI를 활용하여 2,400여 개 전 종목을 수집/분석하고, **Zero-Latency Breakout(돌파) 전략 기반의 자동 매매 시스템** 구축. Oracle Cloud(1 OCPU/1GB)의 한계를 넘는 최적화 지향.
+- **핵심 파이프라인**: 백그라운드 부트스트랩을 통한 시장별(KOSPI/KOSDAQ) 순차적 무중단 데이터 적재 메커니즘 운용.
 - **멀티 레포지토리 / 멀티 디렉토리 구조 (예정)**: 현재 FastAPI 프로젝트이나 향후 웹(Next.js) 및 앱(React Native) 추가 예정.
 - **운영 환경 (Environment)**: 모의투자 배제, 실전투자(PROD) 단일 모드.
 - **설정 파일**: `kis_devlp.yaml`
