@@ -58,6 +58,11 @@ KIS OpenAPI의 JSON 응답은 깊이가 깊고 파편화되어 있습니다. 이
 
 프론트엔드 대시보드(Next.js 예정) 혹은 내부 트레이딩 봇이 판단을 내리기 위해 호출하는 API입니다.
 
-### 주요 기능 (개발 예정)
-- **Zero-Latency 시세 조회**: KIS 서버를 거치지 않고 오직 `trading.db`에서만 데이터를 즉시 꺼내와 반환합니다.
-- **Hotlist (돌파 후보군) 조회**: 당일 거래대금 폭발, 기관/외인 수급 상위 종목, 단기 이동평균선 돌파 등 특정 조건을 만족하는 종목 리스트를 즉각적으로 쿼리하여 응답합니다.
+### 3-A. Zero-Latency 시세 및 스크리너 조회 (`/screener/minute-breakout`)
+- **작동 원리**:
+  - KIS API 서버를 거치지 않고 오직 로컬 `trading.db`의 `minute_ohlcv` 테이블만을 조회합니다.
+  - 1GB RAM 환경에서 Pandas로 수천 종목을 병합(`Merge`)하는 메모리 폭발을 막기 위해, **SQLite의 윈도우 함수(`AVG() OVER (PARTITION BY ticker ORDER BY date, time)`)** 등을 적극 활용하여 이동평균선 계산과 조건 필터링을 DB 엔진단에서 처리합니다.
+  - 이를 통해 특정 조건(예: 거래대금 폭발, 특정 이평선 돌파)을 만족하는 주도주 리스트(Hotlist)를 수십 밀리초 내로 즉각 반환합니다.
+
+### 3-B. (추후 확장을 위한) 실시간 스트리밍
+- 추후 프론트엔드(Next.js / React Native) 대시보드 구성을 위해 WebSocket이나 SSE(Server-Sent Events)를 통해 스크리너 결과를 실시간 알림 형태로 Push하는 기능이 추가될 예정입니다.
