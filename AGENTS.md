@@ -47,3 +47,13 @@
   uv run ruff check . --fix
   uv run ruff format .
   ```
+
+## 5. 절대 원칙 (Boundaries)
+- **메모리 제한**: 1GB RAM 환경이므로 전 종목(2,400개) 데이터를 한 번에 메모리에 올리거나 Pandas로 대규모 병합(Merge)하는 로직을 절대 작성하지 않는다. (항상 Chunk 단위나 SQLite 내부 쿼리로 해결할 것)
+- **API Rate Limit 방어**: KIS API의 초당 20회 통신 제한을 방어하는 `Global Rate-Limiting Queue`의 딜레이 시간(`sleep(0.1)`)을 임의로 줄이거나 삭제하지 않는다.
+- **보안 및 자격 증명**: `.env` 파일의 내용이나 KIS API Secret 정보를 소스 코드에 절대 하드코딩하지 않는다.
+
+## 6. 핵심 코드 패턴 (Patterns)
+- **로깅 규칙**: 스케줄러 및 백그라운드 작업의 로깅은 표준 `info` 대신 반드시 커스텀 레벨인 `logger.sched(...)`를 사용하여 로그 가독성을 유지한다.
+- **API 래퍼 사용**: KIS OpenAPI 호출 결과는 반드시 사전에 정의된 `APIResp` 객체(내부 `DotDict` 포함)로 래핑하여 파이썬 점 표기법(Dot-notation)으로 일관성 있게 다룬다.
+

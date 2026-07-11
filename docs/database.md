@@ -64,8 +64,12 @@
 기관 및 외국인의 자금 유입을 추적하여 Breakout 매매의 신뢰도를 높이기 위한 핫리스트(Hotlist) 추출용 테이블입니다. 
 
 ### 테이블 스키마 (초안)
-- `ticker`, `date` (PK)
-- `foreign_vol` (외인 순매수 수량)
-- `foreign_amt` (외인 순매수 대금)
-- `inst_vol` (기관 순매수 수량)
-- `inst_amt` (기관 순매수 대금)
+| 컬럼명 | 타입 | 제약 조건 | 설명 |
+|---|---|---|---|
+| `ticker` | TEXT | PK (Composite) | 단축코드 |
+| `date` | TEXT | PK (Composite) | 거래일자 (YYYYMMDD 형식) |
+| `foreign_vol` | INTEGER | | 외인 순매수 수량 |
+| `foreign_amt` | INTEGER | | 외인 순매수 대금 |
+| `inst_vol` | INTEGER | | 기관 순매수 수량 |
+| `inst_amt` | INTEGER | | 기관 순매수 대금 |
+

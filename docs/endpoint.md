@@ -9,6 +9,23 @@
 KIS OpenAPI의 JSON 응답은 깊이가 깊고 파편화되어 있습니다. 이를 내부에서 다루기 쉽도록 `APIResp` 객체와 내부 `DotDict` 헬퍼 클래스를 도입하여 점 표기법(Dot-notation)으로 접근할 수 있도록 래핑(Wrapping)합니다.
 
 - **독립성 유지**: `TR_ID`나 엔드포인트 URL 경로 등 API 호출에 필요한 메타 정보는 `app/core/` 하단의 거대한 전역 딕셔너리에 모아두지 않고, **해당 API를 호출하는 서비스 로직이나 라우터 함수 내부에 직접 명시**합니다. 이는 코드를 읽을 때 파편화를 방지하고 결합도를 낮추기 위함입니다.
+- **코드 사용 패턴 (예시)**:
+  ```python
+  # async_kis_fetch를 통해 안전하게 KIS 통신
+  resp = await async_kis_fetch(
+      api_url=api_url, ptr_id=tr_id, tr_cont="", params=params
+  )
+
+  if not resp.is_ok():
+      raise HTTPException(
+          status_code=400, detail=f"KIS API Error: {resp.get_error_message()}"
+      )
+
+  # 응답 본문 추출 (DotDict 변환됨)
+  body = resp.get_body()
+  ohlcv_data = body.output2  # 점 표기법으로 접근 가능
+  ```
+
 
 ---
 
