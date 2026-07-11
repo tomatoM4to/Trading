@@ -64,6 +64,33 @@ class SystemScheduler:
             misfire_grace_time=3600,
         )
 
+        # 3. 매주 평일(월-금) 08:55 분봉 스케줄러 시작 (15:55 자체 종료)
+        self.scheduler.add_job(
+            self.start_minute_scheduler_job,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=8,
+            minute=55,
+            id="start_minute_scheduler_0855",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+
+        # 4. 매일 밤 23:00 분봉 낡은 데이터(3일 초과) 가비지 컬렉션
+        self.scheduler.add_job(
+            self.cleanup_minute_ohlcv_job,
+            trigger="cron",
+            hour=23,
+            minute=0,
+            id="cleanup_minute_ohlcv_2300",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+
         self.scheduler.start()
 
         # 서버 부팅 직후 인증 상태를 보장하기 위해 즉시 1회 수행
@@ -106,3 +133,44 @@ class SystemScheduler:
             raise
         except Exception as e:
             logger.error("Scheduled stock codes refresh failed: %s", e)
+
+    async def start_minute_scheduler_job(self) -> None:
+        """장중 분봉 수집 스케줄러를 시작하는 Job."""
+        from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
+        
+        try:
+            logger.sched("Starting scheduled minute OHLCV collector...")
+            # 분봉 수집기는 15:55까지 무한루프를 돌며 작동함
+            await run_minute_ohlcv_scheduler()
+            logger.sched("Scheduled minute OHLCV collector finished naturally.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Scheduled minute OHLCV collector failed: %s", e)
+
+    async def cleanup_minute_ohlcv_job(self) -> None:
+        """3일이 지난 오래된 분봉 데이터를 DB에서 삭제하는 GC Job."""
+        from datetime import datetime, timedelta
+        from core.database import connect_sqlite
+        
+        try:
+            logger.sched("Starting minute OHLCV garbage collection...")
+            target_date = (datetime.now() - timedelta(days=3)).strftime("%Y%m%d")
+            
+            def _delete_old_data():
+                conn = connect_sqlite()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM minute_ohlcv WHERE date < ?", (target_date,))
+                    deleted_rows = cursor.rowcount
+                    conn.commit()
+                    return deleted_rows
+                finally:
+                    conn.close()
+                    
+            deleted = await asyncio.to_thread(_delete_old_data)
+            logger.sched(f"Minute OHLCV GC completed. Deleted {deleted} rows older than {target_date}.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Minute OHLCV GC failed: %s", e)

@@ -61,7 +61,7 @@ def init_sqlite_connection() -> None:
             low INTEGER NOT NULL,
             close INTEGER NOT NULL,
             volume INTEGER NOT NULL,
-            amount REAL,
+            amount INTEGER,
             PRIMARY KEY (ticker, date, time)
         )
         """)
