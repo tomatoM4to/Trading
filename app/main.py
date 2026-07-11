@@ -16,9 +16,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Application starting up...")
-
+    import os
+    from dotenv import load_dotenv
     from core.bootstrap import run_bootstrap_pipeline
+    
+    # python-dotenv 문서에 따라 .env 파일 로드 (Source: https://github.com/theskumar/python-dotenv)
+    load_dotenv()
+
+    logger.info("Application starting up...")
 
     # DB 연결성 확인 및 초기화
     try:
@@ -28,21 +33,32 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to connect to the database: %s", e)
         raise e
 
-    system_scheduler = SystemScheduler()
-    system_scheduler.start()
-
-    # KIS API Rate Limit 제어 워커 백그라운드 구동
+    # KIS API Rate Limit 제어 워커 백그라운드 구동 (모든 통신에 필수)
     await start_q_worker()
 
-    # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
-    asyncio.create_task(run_bootstrap_pipeline())
+    is_debug = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
+    system_scheduler = None
+
+    if not is_debug:
+        logger.info("Production mode detected. Starting system scheduler and bootstrap pipeline...")
+        system_scheduler = SystemScheduler()
+        system_scheduler.start()
+        
+        # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
+        asyncio.create_task(run_bootstrap_pipeline())
+    else:
+        logger.info("DEBUG mode enabled. Skipping background scheduler and bootstrap tasks.")
+        # 디버그 모드에서는 스케줄러가 돌지 않으므로, KIS API 사용을 위해 수동으로 1회 인증을 수행합니다.
+        from core.kis_auth import auth
+        auth()
 
     yield  # Application runs here
 
     # Shutdown code
     logger.info("Application shutting down...")
     await stop_q_worker()
-    system_scheduler.stop()
+    if system_scheduler:
+        system_scheduler.stop()
 
 
 app = FastAPI(

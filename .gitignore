@@ -15,3 +15,5 @@ KIS20*
 
 *.db
 app/data/*
+
+.env

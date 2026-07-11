@@ -8,6 +8,7 @@ dependencies = [
     "apscheduler>=3.11.3",
     "fastapi[standard]>=0.138.1",
     "pandas>=3.0.3",
+    "python-dotenv>=1.2.2",
     "requests>=2.34.2",
 ]
 
