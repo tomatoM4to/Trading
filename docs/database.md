@@ -22,6 +22,14 @@
 | `total_shares` | REAL | | 상장주수 (천 단위) |
 | `margin_rate` | REAL | | 증거금 비율 |
 | `credit_able` | TEXT | | 신용주문 가능 여부 |
+| `revenue` | REAL | | 매출액 |
+| `operating_profit`| REAL | | 영업이익 |
+| `net_income` | REAL | | 당기순이익 |
+| `roe` | REAL | | ROE (자기자본이익률) |
+| `is_halted` | INTEGER | | 거래정지 여부 (1: 정지, 0: 정상) |
+| `is_admin_issue` | INTEGER | | 관리종목 여부 (1: 관리, 0: 정상) |
+| `is_overheated` | INTEGER | | 단기과열 여부 (1: 과열, 0: 정상) |
+| `is_warning` | INTEGER | | 시장경고/투자경고 여부 (1: 경고, 0: 정상) |
 
 ---
 

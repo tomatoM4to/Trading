@@ -50,13 +50,8 @@ def init_stock_codes_db():
     kpi = kpi[
         kpi["그룹코드"].str.strip() == "ST"
     ]  # 보통주(주식)만 남김 (펀드, ETF, ETN, 리츠 등 완벽 제거)
-    kpi = kpi[kpi["거래정지"].str.strip() != "Y"]
-    kpi = kpi[kpi["정리매매"].str.strip() != "Y"]
-    kpi = kpi[kpi["관리종목"].str.strip() != "Y"]
     kpi = kpi[kpi["SPAC"].str.strip() != "Y"]
     kpi = kpi[kpi["우선주"].str.strip() == "0"]
-    kpi = kpi[kpi["단기과열"].str.strip() == "0"]
-    kpi = kpi[kpi["저유동성"].str.strip() != "Y"]
 
     kpi_cols = {
         "단축코드": "ticker",
@@ -66,20 +61,22 @@ def init_stock_codes_db():
         "상장주수": "total_shares",
         "신용가능": "credit_able",
         "증거금비율": "margin_rate",
+        "매출액": "revenue",
+        "영업이익": "operating_profit",
+        "당기순이익": "net_income",
+        "ROE": "roe",
+        "거래정지": "is_halted",
+        "관리종목": "is_admin_issue",
+        "단기과열": "is_overheated",
+        "시장경고": "is_warning",
     }
     kpi = kpi[list(kpi_cols.keys())].rename(columns=kpi_cols)
 
     # 2. KOSDAQ 필터링
     kdq = parsed_kosdaq_df
     kdq = kdq[kdq["증권그룹구분코드"].str.strip() == "ST"]  # 보통주(주식)만 남김
-    kdq = kdq[kdq["거래정지 여부"].str.strip() != "Y"]
-    kdq = kdq[kdq["정리매매 여부"].str.strip() != "Y"]
-    kdq = kdq[kdq["관리 종목 여부"].str.strip() != "Y"]
     kdq = kdq[kdq["기업인수목적회사여부"].str.strip() != "Y"]
     kdq = kdq[kdq["우선주 구분 코드"].str.strip() == "0"]
-    kdq = kdq[kdq["단기과열종목구분코드"].str.strip() == "0"]
-    kdq = kdq[kdq["저유동성종목 여부"].str.strip() != "Y"]
-    kdq = kdq[kdq["(코스닥)투자주의환기종목여부"].str.strip() != "Y"]
 
     kdq_cols = {
         "단축코드": "ticker",
@@ -89,13 +86,30 @@ def init_stock_codes_db():
         "상장 주수(천)": "total_shares",
         "신용주문 가능 여부": "credit_able",
         "증거금 비율": "margin_rate",
+        "매출액": "revenue",
+        "영업이익": "operating_profit",
+        "단기순이익": "net_income",  # 코스닥 파일에는 '단기순이익'으로 오타가 있음
+        "ROE(자기자본이익률)": "roe",
+        "거래정지 여부": "is_halted",
+        "관리 종목 여부": "is_admin_issue",
+        "단기과열종목구분코드": "is_overheated",
+        "시장 경고 구분 코드": "is_warning",
     }
     kdq = kdq[list(kdq_cols.keys())].rename(columns=kdq_cols)
 
     combined_df = pd.concat([kpi, kdq], ignore_index=True)
 
+    # 문자열 공백 제거 및 플래그 1/0 매핑
+    flag_cols = ["is_halted", "is_admin_issue", "is_overheated", "is_warning"]
+    for col in flag_cols:
+        combined_df[col] = combined_df[col].astype(str).str.strip()
+        # "Y" 거나 "0"이 아닌 다른 문자열 숫자면 1, 아니면 0 ("0", "N", "", "nan")
+        combined_df[col] = combined_df[col].apply(
+            lambda x: 1 if x == "Y" or (x.isdigit() and x != "0") else 0
+        )
+
     # 숫자형 데이터 변환
-    numeric_cols = ["market_cap", "total_shares", "margin_rate"]
+    numeric_cols = ["market_cap", "total_shares", "margin_rate", "revenue", "operating_profit", "net_income", "roe"]
     for col in numeric_cols:
         combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce").fillna(0)
 
