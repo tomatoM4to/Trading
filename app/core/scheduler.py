@@ -78,13 +78,13 @@ class SystemScheduler:
             misfire_grace_time=3600,
         )
 
-        # 4. 매일 밤 23:00 분봉 낡은 데이터(3일 초과) 가비지 컬렉션
+        # 4. 매일 밤 23:00 일/분봉 가비지 컬렉션 (For Loop Chunking GC)
         self.scheduler.add_job(
-            self.cleanup_minute_ohlcv_job,
+            self.cleanup_ohlcv_job,
             trigger="cron",
             hour=23,
             minute=0,
-            id="cleanup_minute_ohlcv_2300",
+            id="cleanup_ohlcv_gc_2300",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -161,32 +161,67 @@ class SystemScheduler:
         except Exception as e:
             logger.error("Scheduled minute OHLCV collector failed: %s", e)
 
-    async def cleanup_minute_ohlcv_job(self) -> None:
-        """3일이 지난 오래된 분봉 데이터를 DB에서 삭제하는 GC Job."""
-        from datetime import datetime, timedelta
+    async def cleanup_ohlcv_job(self) -> None:
+        """오후 11시(23:00) 일봉/분봉 가비지 컬렉션 (Chunking 방식).
+        일봉은 종목별 500개, 분봉은 종목별 1560개만 남기고 안전하게 삭제하여 DB 락을 방지합니다.
+        """
         from core.database import connect_sqlite
         
         try:
-            logger.sched("Starting minute OHLCV garbage collection...")
-            target_date = (datetime.now() - timedelta(days=3)).strftime("%Y%m%d")
+            logger.sched("Starting OHLCV garbage collection (For Loop Chunking)...")
             
-            def _delete_old_data():
+            def _run_gc():
                 conn = connect_sqlite()
                 try:
                     cursor = conn.cursor()
-                    cursor.execute("DELETE FROM minute_ohlcv WHERE date < ?", (target_date,))
-                    deleted_rows = cursor.rowcount
-                    conn.commit()
-                    return deleted_rows
+                    
+                    cursor.execute("SELECT code FROM stock_codes")
+                    tickers = [row[0] for row in cursor.fetchall()]
+                    
+                    total_daily_deleted = 0
+                    total_minute_deleted = 0
+                    
+                    for ticker in tickers:
+                        # 1. 일봉 GC (500개 유지)
+                        cursor.execute(
+                            "SELECT date FROM daily_ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT 1 OFFSET 499",
+                            (ticker,)
+                        )
+                        result = cursor.fetchone()
+                        if result:
+                            cursor.execute(
+                                "DELETE FROM daily_ohlcv WHERE ticker = ? AND date < ?",
+                                (ticker, result[0])
+                            )
+                            total_daily_deleted += cursor.rowcount
+                            
+                        # 2. 분봉 GC (1560개 유지)
+                        cursor.execute(
+                            "SELECT date, time FROM minute_ohlcv WHERE ticker = ? ORDER BY date DESC, time DESC LIMIT 1 OFFSET 1559",
+                            (ticker,)
+                        )
+                        result = cursor.fetchone()
+                        if result:
+                            cutoff_date, cutoff_time = result[0], result[1]
+                            cursor.execute(
+                                "DELETE FROM minute_ohlcv WHERE ticker = ? AND (date < ? OR (date = ? AND time < ?))",
+                                (ticker, cutoff_date, cutoff_date, cutoff_time)
+                            )
+                            total_minute_deleted += cursor.rowcount
+                            
+                        # 종목 하나 끝날 때마다 트랜잭션 릴리즈하여 전체 Lock 원천 차단
+                        conn.commit()
+                            
+                    return total_daily_deleted, total_minute_deleted
                 finally:
                     conn.close()
                     
-            deleted = await asyncio.to_thread(_delete_old_data)
-            logger.sched(f"Minute OHLCV GC completed. Deleted {deleted} rows older than {target_date}.")
+            daily_del, minute_del = await asyncio.to_thread(_run_gc)
+            logger.sched(f"OHLCV GC completed. Deleted daily: {daily_del} rows, minute: {minute_del} rows.")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error("Minute OHLCV GC failed: %s", e)
+            logger.error("OHLCV GC failed: %s", e)
 
     async def run_daily_ohlcv_job(self) -> None:
         """오후 4시 정규 일봉 데이터 업데이트 Job."""
