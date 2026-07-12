@@ -65,22 +65,22 @@ async def run_bootstrap_pipeline():
         finally:
             conn.close()
 
-        # 데이터가 비어있거나, 종목 수보다 터무니없이 적을 경우 초기화 대상
         if ohlcv_count < 100:
             logger.sched(
-                f"[Bootstrap] daily_ohlcv for {market} seems empty ({ohlcv_count} rows). Initializing..."
+                f"[Bootstrap] daily_ohlcv for {market} seems empty ({ohlcv_count} rows). Initializing (Cold Start)..."
             )
-            try:
-                # 여기서 await를 걸었기 때문에, 일봉 적재가 완전히 끝날 때까지 다음 단계로 안 넘어감
-                await run_daily_ohlcv_scheduler(market)
-                logger.sched(f"[Bootstrap] daily_ohlcv for {market} initialized.")
-            except Exception as e:
-                logger.error(
-                    f"[Bootstrap] Failed to initialize daily_ohlcv for {market}: {e}"
-                )
         else:
             logger.sched(
-                f"[Bootstrap] daily_ohlcv for {market} already exists ({ohlcv_count} rows). Skipping."
+                f"[Bootstrap] daily_ohlcv for {market} already exists ({ohlcv_count} rows). Checking for missing gaps..."
+            )
+            
+        try:
+            # 여기서 await를 걸었기 때문에, 일봉 적재가 완전히 끝날 때까지 다음 단계로 안 넘어감
+            await run_daily_ohlcv_scheduler(market)
+            logger.sched(f"[Bootstrap] daily_ohlcv for {market} synchronized.")
+        except Exception as e:
+            logger.error(
+                f"[Bootstrap] Failed to synchronize daily_ohlcv for {market}: {e}"
             )
 
     # 3. 분봉 데이터 (추후 연동)

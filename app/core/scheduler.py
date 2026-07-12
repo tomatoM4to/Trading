@@ -91,6 +91,19 @@ class SystemScheduler:
             misfire_grace_time=3600,
         )
 
+        # 5. 매일 오후 16:00 일봉 데이터 정규 업데이트 (KOSPI & KOSDAQ)
+        self.scheduler.add_job(
+            self.run_daily_ohlcv_job,
+            trigger="cron",
+            hour=16,
+            minute=0,
+            id="run_daily_ohlcv_1600",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+
         self.scheduler.start()
 
         # 서버 부팅 직후 인증 상태를 보장하기 위해 즉시 1회 수행
@@ -174,3 +187,17 @@ class SystemScheduler:
             raise
         except Exception as e:
             logger.error("Minute OHLCV GC failed: %s", e)
+
+    async def run_daily_ohlcv_job(self) -> None:
+        """오후 4시 정규 일봉 데이터 업데이트 Job."""
+        from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
+        
+        try:
+            logger.sched("Starting scheduled daily OHLCV update (KOSPI & KOSDAQ)...")
+            await run_daily_ohlcv_scheduler("KOSPI")
+            await run_daily_ohlcv_scheduler("KOSDAQ")
+            logger.sched("Scheduled daily OHLCV update completed.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Scheduled daily OHLCV update failed: %s", e)
