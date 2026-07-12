@@ -2,10 +2,20 @@ import os
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
+import contextvars
+
+# 동적 DB 라우팅을 위한 ContextVar (테스트 API 요청 시에만 test_trading.db로 덮어쓰기 위해 사용)
+test_db_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("test_db_var", default=None)
 
 
 def get_sqlite_db_path() -> Path:
-    """Return the SQLite DB file path from env or default location."""
+    """Return the SQLite DB file path from env or default location.
+    만약 contextvars에 test_db_var가 세팅되어 있다면 해당 경로를 최우선으로 반환합니다.
+    """
+    test_db = test_db_var.get()
+    if test_db:
+        return Path(test_db).expanduser().resolve()
+
     configured = os.getenv("SQLITE_DB_PATH")
     if configured:
         return Path(configured).expanduser().resolve()
