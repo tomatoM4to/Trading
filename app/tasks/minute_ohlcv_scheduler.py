@@ -13,24 +13,28 @@ API_URL = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
 TR_ID = "FHKST03010230"
 
 
-def get_minute_last_times(market: str = "KOSPI") -> dict[str, str]:
+def get_minute_last_times(markets: list[str] | None = None) -> dict[str, str]:
     """
     DB에서 해당 시장 종목들의 가장 최근 분봉 시간(last_datetime)을 조회합니다.
     Returns: { "005930": "20260710153000", ... }
     """
+    if not markets:
+        markets = ["KOSPI", "KOSDAQ"]
+
     conn = connect_sqlite()
     try:
         cursor = conn.cursor()
+        placeholders = ",".join(["?"] * len(markets))
         # 문자열 결합(||)으로 YYYYMMDDHHMMSS 생성 후 MAX
         cursor.execute(
-            """
+            f"""
             SELECT d.ticker, MAX(d.date || d.time) as last_datetime
             FROM minute_ohlcv d
             JOIN stock_codes s ON d.ticker = s.ticker
-            WHERE s.market = ?
+            WHERE s.market IN ({placeholders})
             GROUP BY d.ticker
             """,
-            (market,),
+            markets,
         )
         last_times = {row["ticker"]: row["last_datetime"] for row in cursor.fetchall()}
         return last_times
@@ -170,16 +174,24 @@ async def process_ticker(ticker: str, last_datetime: str | None = None) -> tuple
     return success_any, newest_dt
 
 
-async def run_minute_ohlcv_scheduler(market: str = "KOSPI"):
-    logger.info(f"Starting Minute OHLCV Scheduler for {market}...")
+async def run_minute_ohlcv_scheduler(markets: list[str] | None = None, single_cycle: bool = False):
+    if not markets:
+        markets = ["KOSPI", "KOSDAQ"]
+        
+    market_str = ", ".join(markets)
+    logger.info(f"Starting Minute OHLCV Scheduler for {market_str} (single_cycle={single_cycle})...")
 
     # Gap Analysis (최초 1회만 DB에서 로드, 이후엔 메모리에서 업데이트)
-    last_times = get_minute_last_times(market)
+    last_times = get_minute_last_times(markets)
 
     conn = connect_sqlite()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT ticker FROM stock_codes WHERE market = ? AND is_halted = 0", (market,))
+        placeholders = ",".join(["?"] * len(markets))
+        cursor.execute(
+            f"SELECT ticker FROM stock_codes WHERE market IN ({placeholders}) AND is_halted = 0", 
+            markets
+        )
         tickers = [row["ticker"] for row in cursor.fetchall()]
     except Exception as e:
         logger.error(f"Failed to fetch tickers: {e}")
@@ -187,19 +199,19 @@ async def run_minute_ohlcv_scheduler(market: str = "KOSPI"):
     finally:
         conn.close()
 
-    logger.info(f"Found {len(tickers)} active tickers for {market}.")
+    logger.info(f"Found {len(tickers)} active tickers for {market_str}.")
 
     # 무한 루프 시작 (장 마감시 종료)
     while True:
         now_time = datetime.now().time()
         
         # 15:55 이후면 스케줄러 종료 (Phase 4의 APScheduler가 내일 다시 켜줄 것임)
-        if now_time >= datetime.strptime("15:55", "%H:%M").time():
+        if now_time >= datetime.strptime("15:55", "%H:%M").time() and not single_cycle:
             logger.info("Market is closed (15:55). Stopping Minute Scheduler until tomorrow.")
             break
             
         # 09:00 이전이면 대기
-        if now_time < datetime.strptime("09:00", "%H:%M").time():
+        if now_time < datetime.strptime("09:00", "%H:%M").time() and not single_cycle:
             await asyncio.sleep(10)
             continue
 
@@ -245,19 +257,24 @@ async def run_minute_ohlcv_scheduler(market: str = "KOSPI"):
         for w in workers:
             w.cancel()
 
-        logger.info(f"Cycle Finished. Success: {success_count}, Fail: {fail_count}. Sleeping 1 second...")
+        logger.info(f"Cycle Finished. Success: {success_count}, Fail: {fail_count}.")
+        
+        if single_cycle:
+            logger.info("Single cycle finished. Exiting minute scheduler (test mode).")
+            break
+            
         await asyncio.sleep(1)
 
 
 _running_minute_scheduler_task: asyncio.Task | None = None
 
-async def start_minute_scheduler_task(market: str = "KOSPI"):
+async def start_minute_scheduler_task(markets: list[str] | None = None):
     global _running_minute_scheduler_task
     if _running_minute_scheduler_task is not None and not _running_minute_scheduler_task.done():
         return False
 
     loop = asyncio.get_running_loop()
-    _running_minute_scheduler_task = loop.create_task(run_minute_ohlcv_scheduler(market))
+    _running_minute_scheduler_task = loop.create_task(run_minute_ohlcv_scheduler(markets))
     return True
 
 def stop_minute_scheduler_task():

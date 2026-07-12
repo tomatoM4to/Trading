@@ -352,7 +352,8 @@ async def test_scheduler_integration():
                 CREATE TABLE IF NOT EXISTS stock_codes (
                     ticker TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
-                    market TEXT NOT NULL
+                    market TEXT NOT NULL,
+                    is_halted INTEGER DEFAULT 0
                 )
                 """
             )
@@ -432,6 +433,125 @@ async def test_scheduler_integration():
 
     finally:
         # 컨텍스트 복원 (다른 API 호출에 영향을 주지 않음)
+        test_db_var.reset(token)
+
+@test_router.get("/minute_scheduler")
+async def test_minute_scheduler_integration():
+    """
+    운영 DB를 보호하기 위해 test_trading.db를 임시 생성하고,
+    무작위 3종목에 대해 [분봉 콜드스타트 -> 갭필(복구) -> 데이터 무결성 검증]을 수행합니다.
+    """
+    import os
+    from pathlib import Path
+    from core.database import test_db_var, connect_sqlite, init_sqlite_connection
+    from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
+
+    # 1. 원본 DB에서 무작위 3종목 추출
+    conn_real = connect_sqlite()
+    try:
+        cursor_real = conn_real.cursor()
+        cursor_real.execute("SELECT * FROM stock_codes ORDER BY RANDOM() LIMIT 3")
+        target_stocks = [dict(row) for row in cursor_real.fetchall()]
+        if not target_stocks:
+            raise HTTPException(status_code=404, detail="No stocks found in real DB")
+    finally:
+        conn_real.close()
+
+    test_db_path = str(Path(__file__).resolve().parents[2] / "test_trading.db")
+
+    if os.path.exists(test_db_path):
+        os.remove(test_db_path)
+
+    token = test_db_var.set(test_db_path)
+    try:
+        init_sqlite_connection()
+
+        conn_test = connect_sqlite()
+        try:
+            cursor_test = conn_test.cursor()
+            cursor_test.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stock_codes (
+                    ticker TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    market TEXT NOT NULL,
+                    is_halted INTEGER DEFAULT 0
+                )
+                """
+            )
+            for s in target_stocks:
+                cursor_test.execute(
+                    "INSERT INTO stock_codes (ticker, name, market) VALUES (?, ?, ?)",
+                    (s["ticker"], s["name"], s["market"]),
+                )
+            conn_test.commit()
+        finally:
+            conn_test.close()
+
+        results = {"target_stocks": [s["ticker"] for s in target_stocks]}
+
+        # 4. [검증 1] 콜드스타트 (1 Cycle만 실행)
+        await run_minute_ohlcv_scheduler(markets=["KOSPI", "KOSDAQ"], single_cycle=True)
+
+        conn_test = connect_sqlite()
+        try:
+            cursor_test = conn_test.cursor()
+            cursor_test.execute("SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker")
+            results["step1_cold_start_counts"] = dict(cursor_test.fetchall())
+        finally:
+            conn_test.close()
+
+        # 5. [검증 2] 최근 30개 분봉 고의 삭제 후 복구 검증
+        conn_test = connect_sqlite()
+        try:
+            cursor_test = conn_test.cursor()
+            for ticker in results["target_stocks"]:
+                cursor_test.execute(
+                    """
+                    DELETE FROM minute_ohlcv 
+                    WHERE ticker = ? AND (date || time) IN (
+                        SELECT date || time FROM minute_ohlcv WHERE ticker = ? ORDER BY date DESC, time DESC LIMIT 30
+                    )
+                    """,
+                    (ticker, ticker),
+                )
+            conn_test.commit()
+
+            cursor_test.execute("SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker")
+            results["step2_deleted_counts"] = dict(cursor_test.fetchall())
+        finally:
+            conn_test.close()
+
+        # 갭필 복구 (1 Cycle)
+        await run_minute_ohlcv_scheduler(markets=["KOSPI", "KOSDAQ"], single_cycle=True)
+
+        conn_test = connect_sqlite()
+        try:
+            cursor_test = conn_test.cursor()
+            cursor_test.execute("SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker")
+            results["step2_recovered_counts"] = dict(cursor_test.fetchall())
+        finally:
+            conn_test.close()
+
+        # 6. [검증 3] API 데이터와 1:1 무결성 비교
+        kospi_count = sum(1 for s in target_stocks if s["market"] == "KOSPI")
+        kosdaq_count = sum(1 for s in target_stocks if s["market"] == "KOSDAQ")
+
+        verify_results = {}
+        if kospi_count > 0:
+            verify_results["KOSPI"] = await verify_minute_integrity(
+                sample_size=kospi_count, market="KOSPI"
+            )
+        if kosdaq_count > 0:
+            verify_results["KOSDAQ"] = await verify_minute_integrity(
+                sample_size=kosdaq_count, market="KOSDAQ"
+            )
+
+        results["step3_integrity_verification"] = verify_results
+
+        return results
+
+    finally:
         test_db_var.reset(token)
 
 router.include_router(daily_router)

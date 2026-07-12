@@ -83,7 +83,20 @@ async def run_bootstrap_pipeline():
                 f"[Bootstrap] Failed to synchronize daily_ohlcv for {market}: {e}"
             )
 
-    # 3. 분봉 데이터 (추후 연동)
+    # 3. 분봉 데이터 스케줄러 기동
+    from datetime import datetime
+    from tasks.minute_ohlcv_scheduler import start_minute_scheduler_task
+
+    now_time = datetime.now().time()
+    market_start = datetime.strptime("09:00", "%H:%M").time()
+    market_end = datetime.strptime("15:55", "%H:%M").time()
+
+    if market_start <= now_time < market_end:
+        logger.sched("[Bootstrap] Current time is within market hours. Starting minute OHLCV scheduler in background...")
+        await start_minute_scheduler_task()
+    else:
+        logger.sched("[Bootstrap] Outside market hours. Minute scheduler will be triggered by cron at 08:55 tomorrow.")
+
     # 4. 수급 데이터 (추후 연동)
 
     logger.sched("=== Bootstrap Pipeline Finished ===")
