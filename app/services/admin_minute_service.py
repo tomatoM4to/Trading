@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 
+
 async def verify_minute_integrity_service(sample_size: int = 10, market: str = "KOSPI"):
     """
     무작위 종목을 추출하여, DB에 저장된 가장 최신 시점을 기준으로 KIS API를 다시 호출해

@@ -73,7 +73,7 @@ async def run_bootstrap_pipeline():
             logger.sched(
                 f"[Bootstrap] daily_ohlcv for {market} already exists ({ohlcv_count} rows). Checking for missing gaps..."
             )
-            
+
         try:
             # 여기서 await를 걸었기 때문에, 일봉 적재가 완전히 끝날 때까지 다음 단계로 안 넘어감
             await run_daily_ohlcv_scheduler(market)
@@ -85,6 +85,7 @@ async def run_bootstrap_pipeline():
 
     # 3. 분봉 데이터 스케줄러 기동
     from datetime import datetime
+
     from tasks.minute_ohlcv_scheduler import start_minute_scheduler_task
 
     now_time = datetime.now().time()
@@ -92,10 +93,14 @@ async def run_bootstrap_pipeline():
     market_end = datetime.strptime("15:55", "%H:%M").time()
 
     if market_start <= now_time < market_end:
-        logger.sched("[Bootstrap] Current time is within market hours. Starting minute OHLCV scheduler in background...")
+        logger.sched(
+            "[Bootstrap] Current time is within market hours. Starting minute OHLCV scheduler in background..."
+        )
         await start_minute_scheduler_task()
     else:
-        logger.sched("[Bootstrap] Outside market hours. Minute scheduler will be triggered by cron at 08:55 tomorrow.")
+        logger.sched(
+            "[Bootstrap] Outside market hours. Minute scheduler will be triggered by cron at 08:55 tomorrow."
+        )
 
     # 4. 수급 데이터 (추후 연동)
 

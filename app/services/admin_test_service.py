@@ -1,11 +1,13 @@
 import os
 from pathlib import Path
+
+from core.database import connect_sqlite, init_sqlite_connection, test_db_var
 from fastapi import HTTPException
-from core.database import test_db_var, connect_sqlite, init_sqlite_connection
-from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
-from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
 from services.admin_daily_service import verify_daily_integrity_service
 from services.admin_minute_service import verify_minute_integrity_service
+from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
+from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
+
 
 async def test_daily_scheduler_integration_service():
     # 1. 원본 DB에서 무작위 3종목 추출
@@ -63,7 +65,9 @@ async def test_daily_scheduler_integration_service():
         conn_test = connect_sqlite()
         try:
             cursor_test = conn_test.cursor()
-            cursor_test.execute("SELECT ticker, COUNT(*) FROM daily_ohlcv GROUP BY ticker")
+            cursor_test.execute(
+                "SELECT ticker, COUNT(*) FROM daily_ohlcv GROUP BY ticker"
+            )
             results["step1_cold_start_counts"] = dict(cursor_test.fetchall())
         finally:
             conn_test.close()
@@ -84,7 +88,9 @@ async def test_daily_scheduler_integration_service():
                 )
             conn_test.commit()
 
-            cursor_test.execute("SELECT ticker, COUNT(*) FROM daily_ohlcv GROUP BY ticker")
+            cursor_test.execute(
+                "SELECT ticker, COUNT(*) FROM daily_ohlcv GROUP BY ticker"
+            )
             results["step2_deleted_counts"] = dict(cursor_test.fetchall())
         finally:
             conn_test.close()
@@ -96,7 +102,9 @@ async def test_daily_scheduler_integration_service():
         conn_test = connect_sqlite()
         try:
             cursor_test = conn_test.cursor()
-            cursor_test.execute("SELECT ticker, COUNT(*) FROM daily_ohlcv GROUP BY ticker")
+            cursor_test.execute(
+                "SELECT ticker, COUNT(*) FROM daily_ohlcv GROUP BY ticker"
+            )
             results["step2_recovered_counts"] = dict(cursor_test.fetchall())
         finally:
             conn_test.close()
@@ -122,6 +130,7 @@ async def test_daily_scheduler_integration_service():
     finally:
         # 컨텍스트 복원 (다른 API 호출에 영향을 주지 않음)
         test_db_var.reset(token)
+
 
 async def test_minute_scheduler_integration_service():
     # 1. 원본 DB에서 무작위 3종목 추출
@@ -174,7 +183,9 @@ async def test_minute_scheduler_integration_service():
         conn_test = connect_sqlite()
         try:
             cursor_test = conn_test.cursor()
-            cursor_test.execute("SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker")
+            cursor_test.execute(
+                "SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker"
+            )
             results["step1_cold_start_counts"] = dict(cursor_test.fetchall())
         finally:
             conn_test.close()
@@ -195,7 +206,9 @@ async def test_minute_scheduler_integration_service():
                 )
             conn_test.commit()
 
-            cursor_test.execute("SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker")
+            cursor_test.execute(
+                "SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker"
+            )
             results["step2_deleted_counts"] = dict(cursor_test.fetchall())
         finally:
             conn_test.close()
@@ -206,7 +219,9 @@ async def test_minute_scheduler_integration_service():
         conn_test = connect_sqlite()
         try:
             cursor_test = conn_test.cursor()
-            cursor_test.execute("SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker")
+            cursor_test.execute(
+                "SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker"
+            )
             results["step2_recovered_counts"] = dict(cursor_test.fetchall())
         finally:
             conn_test.close()

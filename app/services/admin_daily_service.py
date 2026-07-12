@@ -5,123 +5,12 @@ from core.database import connect_sqlite
 from fastapi import HTTPException
 from schemas.admin import (
     CandleData,
-    DailyCheckResponse,
     DailyVerifyResponse,
-    DateDistribution,
-    HistoricalDepthIntegrity,
     MismatchSample,
-    UpToDateIntegrity,
     VerifyDetail,
     VerifySummary,
 )
 from tasks.daily_ohlcv_scheduler import fetch_and_save_ohlcv
-
-
-def check_daily_ohlcv_service(market: str = "KOSPI") -> DailyCheckResponse:
-    conn = connect_sqlite()
-    try:
-        cursor = conn.cursor()
-
-        # 1. 마스터 테이블(stock_codes)의 전체 종목 수
-        cursor.execute("SELECT COUNT(*) FROM stock_codes WHERE market = ?", (market,))
-        target_total_tickers = cursor.fetchone()[0]
-
-        # 2. 일봉 테이블에 적재된 최신 날짜 분포
-        query_latest = """
-            SELECT
-                last_date,
-                COUNT(*) as ticker_count
-            FROM (
-                SELECT d.ticker, MAX(d.date) as last_date
-                FROM daily_ohlcv d
-                JOIN stock_codes s ON d.ticker = s.ticker
-                WHERE s.market = ?
-                GROUP BY d.ticker
-            )
-            GROUP BY last_date
-            ORDER BY last_date DESC
-            LIMIT 5
-        """
-        cursor.execute(query_latest, (market,))
-        distribution_raw = [dict(row) for row in cursor.fetchall()]
-
-        # 3. 과거 데이터 충분성 (400일 이상 데이터가 적재된 종목 수)
-        query_depth = """
-            SELECT COUNT(*) FROM (
-                SELECT d.ticker
-                FROM daily_ohlcv d
-                JOIN stock_codes s ON d.ticker = s.ticker
-                WHERE s.market = ?
-                GROUP BY d.ticker
-                HAVING COUNT(*) >= 400
-            )
-        """
-        cursor.execute(query_depth, (market,))
-        deep_history_count = cursor.fetchone()[0]
-
-        # 4. 전체 캔들 수
-        cursor.execute(
-            """
-            SELECT COUNT(*)
-            FROM daily_ohlcv d
-            JOIN stock_codes s ON d.ticker = s.ticker
-            WHERE s.market = ?
-        """,
-            (market,),
-        )
-        total_rows = cursor.fetchone()[0]
-
-        status = "No Data"
-        is_up_to_date = False
-        is_deep_enough = False
-
-        if distribution_raw and target_total_tickers > 0:
-            most_recent_count = distribution_raw[0]["ticker_count"]
-
-            is_up_to_date = most_recent_count == target_total_tickers
-            is_deep_enough = deep_history_count >= target_total_tickers * 0.9
-
-            if is_up_to_date and is_deep_enough:
-                status = "Healthy (최신화 100% 완료 및 과거 데이터 충분)"
-            elif not is_up_to_date:
-                status = f"Needs Check (최신 데이터 누락: {most_recent_count}/{target_total_tickers})"
-            else:
-                status = "Needs Check (과거 데이터 부족 종목 다수)"
-
-        distribution = [
-            DateDistribution(last_date=d["last_date"], ticker_count=d["ticker_count"])
-            for d in distribution_raw
-        ]
-
-        up_to_date = UpToDateIntegrity(
-            latest_date=distribution_raw[0]["last_date"] if distribution_raw else None,
-            tickers_with_latest_date=distribution_raw[0]["ticker_count"]
-            if distribution_raw
-            else 0,
-            is_100_percent=is_up_to_date,
-        )
-
-        hist_depth = HistoricalDepthIntegrity(
-            tickers_with_400_plus_days=deep_history_count,
-            percentage=round((deep_history_count / target_total_tickers) * 100, 1)
-            if target_total_tickers > 0
-            else 0.0,
-            is_healthy=is_deep_enough,
-        )
-
-        return DailyCheckResponse(
-            status=status,
-            target_total_tickers=target_total_tickers,
-            total_saved_rows=total_rows,
-            up_to_date_integrity=up_to_date,
-            historical_depth_integrity=hist_depth,
-            latest_date_distribution=distribution,
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB Query Error: {e}") from e
-    finally:
-        conn.close()
 
 
 async def verify_daily_integrity_service(

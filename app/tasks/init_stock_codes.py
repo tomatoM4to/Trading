@@ -109,7 +109,15 @@ def init_stock_codes_db():
         )
 
     # 숫자형 데이터 변환
-    numeric_cols = ["market_cap", "total_shares", "margin_rate", "revenue", "operating_profit", "net_income", "roe"]
+    numeric_cols = [
+        "market_cap",
+        "total_shares",
+        "margin_rate",
+        "revenue",
+        "operating_profit",
+        "net_income",
+        "roe",
+    ]
     for col in numeric_cols:
         combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce").fillna(0)
 

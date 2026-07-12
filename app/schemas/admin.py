@@ -1,34 +1,5 @@
 from pydantic import BaseModel
 
-# --- Daily Check Models ---
-
-
-class UpToDateIntegrity(BaseModel):
-    latest_date: str | None
-    tickers_with_latest_date: int
-    is_100_percent: bool
-
-
-class HistoricalDepthIntegrity(BaseModel):
-    tickers_with_400_plus_days: int
-    percentage: float
-    is_healthy: bool
-
-
-class DateDistribution(BaseModel):
-    last_date: str | None
-    ticker_count: int
-
-
-class DailyCheckResponse(BaseModel):
-    status: str
-    target_total_tickers: int
-    total_saved_rows: int
-    up_to_date_integrity: UpToDateIntegrity
-    historical_depth_integrity: HistoricalDepthIntegrity
-    latest_date_distribution: list[DateDistribution]
-
-
 # --- Daily Verify Models ---
 
 

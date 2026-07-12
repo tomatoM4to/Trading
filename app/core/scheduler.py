@@ -150,7 +150,7 @@ class SystemScheduler:
     async def start_minute_scheduler_job(self) -> None:
         """장중 분봉 수집 스케줄러를 시작하는 Job."""
         from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
-        
+
         try:
             logger.sched("Starting scheduled minute OHLCV collector...")
             # 분봉 수집기는 15:55까지 무한루프를 돌며 작동함
@@ -166,58 +166,60 @@ class SystemScheduler:
         일봉은 종목별 500개, 분봉은 종목별 1560개만 남기고 안전하게 삭제하여 DB 락을 방지합니다.
         """
         from core.database import connect_sqlite
-        
+
         try:
             logger.sched("Starting OHLCV garbage collection (For Loop Chunking)...")
-            
+
             def _run_gc():
                 conn = connect_sqlite()
                 try:
                     cursor = conn.cursor()
-                    
+
                     cursor.execute("SELECT code FROM stock_codes")
                     tickers = [row[0] for row in cursor.fetchall()]
-                    
+
                     total_daily_deleted = 0
                     total_minute_deleted = 0
-                    
+
                     for ticker in tickers:
                         # 1. 일봉 GC (500개 유지)
                         cursor.execute(
                             "SELECT date FROM daily_ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT 1 OFFSET 499",
-                            (ticker,)
+                            (ticker,),
                         )
                         result = cursor.fetchone()
                         if result:
                             cursor.execute(
                                 "DELETE FROM daily_ohlcv WHERE ticker = ? AND date < ?",
-                                (ticker, result[0])
+                                (ticker, result[0]),
                             )
                             total_daily_deleted += cursor.rowcount
-                            
+
                         # 2. 분봉 GC (1560개 유지)
                         cursor.execute(
                             "SELECT date, time FROM minute_ohlcv WHERE ticker = ? ORDER BY date DESC, time DESC LIMIT 1 OFFSET 1559",
-                            (ticker,)
+                            (ticker,),
                         )
                         result = cursor.fetchone()
                         if result:
                             cutoff_date, cutoff_time = result[0], result[1]
                             cursor.execute(
                                 "DELETE FROM minute_ohlcv WHERE ticker = ? AND (date < ? OR (date = ? AND time < ?))",
-                                (ticker, cutoff_date, cutoff_date, cutoff_time)
+                                (ticker, cutoff_date, cutoff_date, cutoff_time),
                             )
                             total_minute_deleted += cursor.rowcount
-                            
+
                         # 종목 하나 끝날 때마다 트랜잭션 릴리즈하여 전체 Lock 원천 차단
                         conn.commit()
-                            
+
                     return total_daily_deleted, total_minute_deleted
                 finally:
                     conn.close()
-                    
+
             daily_del, minute_del = await asyncio.to_thread(_run_gc)
-            logger.sched(f"OHLCV GC completed. Deleted daily: {daily_del} rows, minute: {minute_del} rows.")
+            logger.sched(
+                f"OHLCV GC completed. Deleted daily: {daily_del} rows, minute: {minute_del} rows."
+            )
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -226,7 +228,7 @@ class SystemScheduler:
     async def run_daily_ohlcv_job(self) -> None:
         """오후 4시 정규 일봉 데이터 업데이트 Job."""
         from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
-        
+
         try:
             logger.sched("Starting scheduled daily OHLCV update (KOSPI & KOSDAQ)...")
             await run_daily_ohlcv_scheduler("KOSPI")

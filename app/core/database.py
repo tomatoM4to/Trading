@@ -1,11 +1,13 @@
+import contextvars
 import os
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
-import contextvars
 
 # 동적 DB 라우팅을 위한 ContextVar (테스트 API 요청 시에만 test_trading.db로 덮어쓰기 위해 사용)
-test_db_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("test_db_var", default=None)
+test_db_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "test_db_var", default=None
+)
 
 
 def get_sqlite_db_path() -> Path:

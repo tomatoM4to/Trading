@@ -7,6 +7,7 @@ from services.admin_test_service import (
 router = APIRouter()
 test_router = APIRouter(prefix="/admin/test", tags=["Admin (Test)"])
 
+
 @test_router.get("/daily_scheduler")
 async def test_daily_scheduler_integration():
     """
@@ -26,4 +27,3 @@ async def test_minute_scheduler_integration():
 
 
 router.include_router(test_router)
-
