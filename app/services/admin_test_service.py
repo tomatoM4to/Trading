@@ -79,7 +79,7 @@ async def test_daily_scheduler_integration_service():
             for ticker in results["target_stocks"]:
                 cursor_test.execute(
                     """
-                    DELETE FROM daily_ohlcv 
+                    DELETE FROM daily_ohlcv
                     WHERE ticker = ? AND date IN (
                         SELECT date FROM daily_ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT 30
                     )
@@ -197,7 +197,7 @@ async def test_minute_scheduler_integration_service():
             for ticker in results["target_stocks"]:
                 cursor_test.execute(
                     """
-                    DELETE FROM minute_ohlcv 
+                    DELETE FROM minute_ohlcv
                     WHERE ticker = ? AND (date || time) IN (
                         SELECT date || time FROM minute_ohlcv WHERE ticker = ? ORDER BY date DESC, time DESC LIMIT 30
                     )
