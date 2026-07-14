@@ -1,0 +1,116 @@
+name: Project Name
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # 1단계: 이미지 빌드 및 푸시
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set Image Name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.CR_PAT }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY  }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=sha-${{ github.sha }}
+            type=ref,event=branch
+            latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # 2단계: OCI 서버에 배포
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set Image Name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}-backend" >> $GITHUB_ENV
+
+      - name: Copy docker-compose and nginx configs
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USERNAME }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          source: "docker-compose.yml,.nginx,init-cert.sh"
+          target: "~/Trading"
+
+      - name: Execute remote ssh commands to deploy
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE_TAG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          DOMAIN: ${{ secrets.DOMAIN }}
+          KIS_MY_APP: ${{ secrets.KIS_MY_APP }}
+          KIS_MY_SEC: ${{ secrets.KIS_MY_SEC }}
+          KIS_MY_HTSID: ${{ secrets.KIS_MY_HTSID }}
+          KIS_MY_ACCT_STOCK: ${{ secrets.KIS_MY_ACCT_STOCK }}
+          KIS_MY_PROD: ${{ secrets.KIS_MY_PROD }}
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USERNAME }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          envs: IMAGE_TAG,DOMAIN,KIS_MY_APP,KIS_MY_SEC,KIS_MY_HTSID,KIS_MY_ACCT_STOCK,KIS_MY_PROD
+          script: |
+            mkdir -p ~/Trading/data
+            cd ~/Trading
+            # GHCR 로그인 (sudo 사용)
+            echo "${{ secrets.CR_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # 환경 변수 설정 및 배포 (sudo -E 사용)
+            export IMAGE_TAG=$IMAGE_TAG
+            export DOMAIN=$DOMAIN
+            
+            # kis_devlp.yaml 최신화 (Secret 변경 시 자동 적용)
+            cat <<EOF > kis_devlp.yaml
+            my_app: "$KIS_MY_APP"
+            my_sec: "$KIS_MY_SEC"
+            my_htsid: "$KIS_MY_HTSID"
+            my_acct_stock: "$KIS_MY_ACCT_STOCK"
+            my_prod: "${KIS_MY_PROD:-01}"
+            prod: "https://openapi.koreainvestment.com:9443"
+            ops: "ws://ops.koreainvestment.com:21000"
+            vps: "https://openapivts.koreainvestment.com:29443"
+            vops: "ws://ops.koreainvestment.com:31000"
+            my_token: ""
+            my_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+            EOF
+
+            sudo -E docker compose pull
+            sudo -E docker compose up -d
+
+            # 미사용 이미지 정리
+            sudo docker image prune -f

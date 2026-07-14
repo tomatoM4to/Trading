@@ -58,5 +58,12 @@
 ## 6. 핵심 코드 패턴 (Patterns)
 - **로깅 규칙**: 스케줄러 및 백그라운드 작업의 로깅은 표준 `info` 대신 반드시 커스텀 레벨인 `logger.sched(...)`를 사용하여 로그 가독성을 유지한다.
 - **API 래퍼 사용**: KIS OpenAPI 호출 결과는 반드시 사전에 정의된 `APIResp` 객체(내부 `DotDict` 포함)로 래핑하여 파이썬 점 표기법(Dot-notation)으로 일관성 있게 다룬다.
-- **테스트 환경 격리 (DB Routing)**: 무결성 검증이나 파괴적인 통합 테스트(삭제/복구)를 수행할 때 운영 DB(`trading.db`)를 오염시키지 않도록, `contextvars.ContextVar`(`test_db_var`)를 활용해 런타임에 동적으로 `test_trading.db`로 라우팅하는 패턴을 반드시 준수한다.
+    - **테스트 환경 격리 (DB Routing)**: 무결성 검증이나 파괴적인 통합 테스트(삭제/복구)를 수행할 때 운영 DB(`trading.db`)를 오염시키지 않도록, `contextvars.ContextVar`(`test_db_var`)를 활용해 런타임에 동적으로 `test_trading.db`로 라우팅하는 패턴을 반드시 준수한다.
   - ⚠️ 단, 단순 상태 점검을 위한 순수 조회(Read-only) 모니터링 API(`/admin/live/...`)는 우회 없이 실제 운영 DB를 직접 조회한다.
+
+## 7. 배포 및 CI/CD 파이프라인 (CI/CD Pipeline)
+- **자세한 구조는 `docs/cicd.md` 참고.**
+- **초기 서버 세팅**: `.github/workflows/setup-server.yml` (수동 트리거). 배포 경로(`~/Trading`) 생성, `.env` 및 `kis_devlp.yaml` 파일 동적 생성, 초기 SSL 발급을 수행한다.
+- **자동 배포**: `.github/workflows/deploy.yml` (`main` Push 트리거). 도커 이미지 빌드 후 서버로 전송하며, 시크릿 변수 갱신을 위해 `kis_devlp.yaml`을 재생성한 뒤 `docker compose up -d`를 수행한다.
+- **설정 파일 동적 생성 원칙**: `.env` 및 `kis_devlp.yaml`은 보안상 `.gitignore`에 등록되어 도커 이미지에 포함되지 않으므로, GitHub Actions가 SSH 접속 시 GitHub Secrets 값을 이용해 서버에 직접 동적 생성(Echo/Cat)하고 도커 볼륨으로 마운트하는 패턴을 유지한다. (참고: `docs/decisions/ADR-006-dynamic-config-generation.md`)
+- **Docker 데이터 영속성 원칙**: OCI 서버에 배포 시 도커 컨테이너 내의 코드를 호스트의 빈 폴더로 덮어쓰는 행위나 SQLite WAL 모드를 단일 파일로 마운트하는 행위를 엄격히 금지하며, 반드시 전용 데이터 폴더(`./data:/app/data`)를 마운트한다. (참고: `docs/decisions/ADR-005-docker-sqlite-persistence-strategy.md`)

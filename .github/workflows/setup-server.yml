@@ -1,0 +1,77 @@
+name: 🛠️ Setup Server & SSL
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name (e.g. api.trading.com)'
+        required: true
+        default: ''
+      email:
+        description: 'Email for Let`s Encrypt SSL'
+        required: true
+        default: ''
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Copy infrastructure files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USERNAME }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          source: "docker-compose.yml,.nginx,init-cert.sh"
+          target: "~/Trading"
+
+      - name: Execute Server Setup & SSL Initialization
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DOMAIN: ${{ github.event.inputs.domain }}
+          EMAIL: ${{ github.event.inputs.email }}
+          KIS_MY_APP: ${{ secrets.KIS_MY_APP }}
+          KIS_MY_SEC: ${{ secrets.KIS_MY_SEC }}
+          KIS_MY_HTSID: ${{ secrets.KIS_MY_HTSID }}
+          KIS_MY_ACCT_STOCK: ${{ secrets.KIS_MY_ACCT_STOCK }}
+          KIS_MY_PROD: ${{ secrets.KIS_MY_PROD }}
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USERNAME }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          envs: DOMAIN,EMAIL,KIS_MY_APP,KIS_MY_SEC,KIS_MY_HTSID,KIS_MY_ACCT_STOCK,KIS_MY_PROD
+          script: |
+            mkdir -p ~/Trading/data
+            cd ~/Trading
+            
+            # 1. .env 파일 자동 생성
+            echo "==== .env 파일 생성 중 ===="
+            echo "DOMAIN=$DOMAIN" > .env
+            echo "EMAIL=$EMAIL" >> .env
+            echo "DEBUG=False" >> .env
+            
+            # 2. kis_devlp.yaml 자동 생성 (소스코드의 하드코딩 방지)
+            echo "==== kis_devlp.yaml 파일 생성 중 ===="
+            cat <<EOF > kis_devlp.yaml
+            my_app: "$KIS_MY_APP"
+            my_sec: "$KIS_MY_SEC"
+            my_htsid: "$KIS_MY_HTSID"
+            my_acct_stock: "$KIS_MY_ACCT_STOCK"
+            my_prod: "${KIS_MY_PROD:-01}"
+            prod: "https://openapi.koreainvestment.com:9443"
+            ops: "ws://ops.koreainvestment.com:21000"
+            vps: "https://openapivts.koreainvestment.com:29443"
+            vops: "ws://ops.koreainvestment.com:31000"
+            my_token: ""
+            my_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+            EOF
+            
+            # 3. 인증서 발급 스크립트 권한 부여 및 실행
+            echo "==== SSL 인증서 발급 시작 ===="
+            chmod +x init-cert.sh
+            sudo -E bash init-cert.sh
+            
+            echo "==== 서버 초기 세팅 완료! ===="
