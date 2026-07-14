@@ -40,7 +40,7 @@
 
 ## 4. 실행 방법 (Run & Debug)
 - **백엔드 디버그 모드 실행**:
-  `.env` 파일에 `DEBUG=True` 설정 시 무거운 백그라운드 스케줄러가 차단되어 단건 API 테스트에 용이합니다.
+  `.env` 파일에 `DEBUG=True` 설정 시 무거운 백그라운드 스케줄러가 차단되어 단건 API 테스트에 용이합니다. 또한 서버 부팅 시 KIS API 토큰을 강제로 재발급하지 않고 캐시를 재사용하여 API 호출을 절약합니다. 반대로 운영 환경(`DEBUG=False`)에서는 배포/재시작 시 항상 안전하게 새 토큰을 강제 발급(`force=True`)합니다. (참고: `docs/decisions/ADR-007-dynamic-auth-token-issuance.md`)
   ```bash
   uv run fastapi dev app/main.py
   ```

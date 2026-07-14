@@ -109,8 +109,11 @@ class SystemScheduler:
         # 서버 부팅 직후 인증 상태를 보장하기 위해 즉시 1회 수행
         # DEBUG가 False(운영)일 때는 무조건 force=True로 재발급, DEBUG가 True일 때는 캐시 사용(force=False)
         import os
+
         is_debug = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
-        self._bg_auth_task = asyncio.create_task(self.refresh_auth_job(force=not is_debug))
+        self._bg_auth_task = asyncio.create_task(
+            self.refresh_auth_job(force=not is_debug)
+        )
         self._is_running = True
         logger.sched("System scheduler started")
 
