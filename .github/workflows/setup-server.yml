@@ -52,6 +52,8 @@ jobs:
             echo "DOMAIN=$DOMAIN" > .env
             echo "EMAIL=$EMAIL" >> .env
             echo "DEBUG=False" >> .env
+            echo "SCHED=True" >> .env
+            echo "LOG_LEVEL=INFO" >> .env
             
             # 2. kis_devlp.yaml 자동 생성 (소스코드의 하드코딩 방지)
             echo "==== kis_devlp.yaml 파일 생성 중 ===="

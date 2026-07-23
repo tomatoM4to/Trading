@@ -52,9 +52,9 @@ class LogCategoryHighlighter(RegexHighlighter):
 
 def setup_logging() -> None:
     """Configure root logger with a simpler Rich handler for performance."""
-    # 기본 로그 레벨을 WARNING으로 상향하여 일반적인 INFO 로그가 디스크 I/O를 유발하지 않게 함
-    level_name = os.getenv("LOG_LEVEL", "WARNING").upper()
-    level = getattr(logging, level_name, logging.WARNING)
+    # 로컬 개발 및 디버깅 편의를 위해 기본 로그 레벨을 INFO로 설정하여 모든 로그가 보이도록 수정
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
 
     console = Console(stderr=True)
     handler = RichHandler(

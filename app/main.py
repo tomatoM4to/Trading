@@ -38,11 +38,24 @@ async def lifespan(app: FastAPI):
     await start_q_worker()
 
     is_debug = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
+    is_sched = os.getenv("SCHED", "False").lower() in ("true", "1", "t")
+
+    from core.kis_auth import auth
+
+    # 1. KIS API Auth 토큰 초기화
+    if is_debug:
+        logger.info("DEBUG mode is ON: Reusing cached auth token (force=False)")
+        await asyncio.to_thread(auth, force=False)
+    else:
+        logger.info("DEBUG mode is OFF: Forcing new auth token issuance (force=True)")
+        await asyncio.to_thread(auth, force=True)
+
     system_scheduler = None
 
-    if not is_debug:
-        logger.info(
-            "Production mode detected. Starting system scheduler and bootstrap pipeline..."
+    # 2. 백그라운드 스케줄러 & 부트스트랩 제어
+    if is_sched:
+        logger.sched(
+            "SCHED mode is ON: Starting system scheduler and bootstrap pipeline..."
         )
         system_scheduler = SystemScheduler()
         system_scheduler.start()
@@ -50,13 +63,9 @@ async def lifespan(app: FastAPI):
         # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
         asyncio.create_task(run_bootstrap_pipeline())
     else:
-        logger.info(
-            "DEBUG mode enabled. Skipping background scheduler and bootstrap tasks."
+        logger.sched(
+            "SCHED mode is OFF: Skipping background scheduler and bootstrap tasks."
         )
-        # 디버그 모드에서는 스케줄러가 돌지 않으므로, KIS API 사용을 위해 수동으로 1회 인증을 수행합니다.
-        from core.kis_auth import auth
-
-        auth()
 
     yield  # Application runs here
 
