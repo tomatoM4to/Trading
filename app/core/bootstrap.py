@@ -83,31 +83,13 @@ async def run_bootstrap_pipeline():
                 f"[Bootstrap] Failed to synchronize daily_ohlcv for {market}: {e}"
             )
 
-    # 3. 분봉 데이터 스케줄러 기동 및 백필
-    from datetime import datetime
+    # 3. 분봉 데이터 스케줄러 기동 (단일 Unified 스케줄러)
+    from tasks.minute_ohlcv_scheduler import start_minute_scheduler_task
 
-    from tasks.minute_ohlcv_scheduler import (
-        run_minute_backfill_task,
-        start_minute_scheduler_task,
+    logger.sched(
+        "[Bootstrap] Starting unified real-time minute OHLCV scheduler in background..."
     )
-
-    # 서버 부팅 시간과 무관하게 비동기로 과거 3영업일 분봉 빈 공간 채우기 (Fire-and-forget)
-    logger.sched("[Bootstrap] Spawning asynchronous minute OHLCV backfill task...")
-    asyncio.create_task(run_minute_backfill_task(limit_days=3))
-
-    now_time = datetime.now().time()
-    market_start = datetime.strptime("09:00", "%H:%M").time()
-    market_end = datetime.strptime("15:55", "%H:%M").time()
-
-    if market_start <= now_time < market_end:
-        logger.sched(
-            "[Bootstrap] Current time is within market hours. Starting real-time minute OHLCV scheduler in background..."
-        )
-        await start_minute_scheduler_task()
-    else:
-        logger.sched(
-            "[Bootstrap] Outside market hours. Real-time minute scheduler will be triggered by cron at 08:55 tomorrow."
-        )
+    await start_minute_scheduler_task()
 
     # 4. 수급 데이터 (추후 연동)
 
