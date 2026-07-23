@@ -46,19 +46,49 @@ class LogCategoryHighlighter(RegexHighlighter):
     highlights = [
         r"(?P<auth_tag>\[AUTH\])",
         r"(?P<sched_tag>\[SCHED\])",
+        r"(?P<trading_tag>\[TRADING\])",
+        r"(?P<bootstrap_tag>\[Bootstrap\])",
         r"(?P<app_tag>\[APP\])",
     ]
 
 
 def setup_logging() -> None:
     """Configure root logger with a simpler Rich handler for performance."""
-    # 로컬 개발 및 디버깅 편의를 위해 기본 로그 레벨을 INFO로 설정하여 모든 로그가 보이도록 수정
+    # 1. 묵언수행(Silence)할 외부 시끄러운 로거들 목록 (WARNING 레벨 이상만 출력)
+    noisy_loggers = [
+        "uvicorn",
+        "uvicorn.access",
+        "uvicorn.error",
+        "apscheduler",
+        "apscheduler.scheduler",
+        "apscheduler.executors.default",
+        "watchfiles",
+        "watchfiles.main",
+    ]
+    for logger_name in noisy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+    # 2. 내 앱의 기본 로그 레벨 설정
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
-    console = Console(stderr=True)
+    # 3. 색상 테마 정의
+    from rich.theme import Theme
+
+    custom_theme = Theme(
+        {
+            "logging.category.auth_tag": "bold green",
+            "logging.category.sched_tag": "bold blue",
+            "logging.category.trading_tag": "bold magenta",
+            "logging.category.bootstrap_tag": "bold cyan",
+            "logging.category.app_tag": "bold white",
+        }
+    )
+
+    console = Console(stderr=True, theme=custom_theme)
     handler = RichHandler(
         console=console,
+        highlighter=LogCategoryHighlighter(),
         rich_tracebacks=False,  # 트레이스백 생성 비용 제거
         show_time=False,  # 시간 출력 제외
         show_level=True,
