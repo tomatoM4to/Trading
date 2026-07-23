@@ -22,7 +22,7 @@ async def test_daily_scheduler_integration_service():
         conn_real.close()
 
     # 2. ContextVar 설정하여 이후 모든 DB 연결이 test_trading.db를 바라보게 함
-    test_db_path = str(Path(__file__).resolve().parents[2] / "test_trading.db")
+    test_db_path = str(Path(__file__).resolve().parents[2] / "data" / "test_trading.db")
 
     # 테스트 전 기존 test_trading.db 삭제하여 깨끗한 환경 유지
     if os.path.exists(test_db_path):
@@ -144,7 +144,7 @@ async def test_minute_scheduler_integration_service():
     finally:
         conn_real.close()
 
-    test_db_path = str(Path(__file__).resolve().parents[2] / "test_trading.db")
+    test_db_path = str(Path(__file__).resolve().parents[2] / "data" / "test_trading.db")
 
     if os.path.exists(test_db_path):
         os.remove(test_db_path)

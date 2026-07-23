@@ -21,7 +21,7 @@ def get_sqlite_db_path() -> Path:
     configured = os.getenv("SQLITE_DB_PATH")
     if configured:
         return Path(configured).expanduser().resolve()
-    return Path(__file__).resolve().parents[2] / "trading.db"
+    return Path(__file__).resolve().parents[2] / "data" / "trading.db"
 
 
 def connect_sqlite() -> sqlite3.Connection:

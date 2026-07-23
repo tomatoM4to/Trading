@@ -9,7 +9,6 @@ services:
       - ./kis_devlp.yaml:/app/kis_devlp.yaml:ro
     environment:
       - TZ=Asia/Seoul
-      - SQLITE_DB_PATH=/app/data/trading.db
 
   nginx:
     image: nginx:alpine

@@ -14,6 +14,6 @@ kis_devlp.yaml
 KIS20*
 
 *.db
-app/data/*
+data/
 
 .env

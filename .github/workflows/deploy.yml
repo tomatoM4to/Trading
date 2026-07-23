@@ -85,8 +85,16 @@ jobs:
           key: ${{ secrets.OCI_SSH_KEY }}
           envs: IMAGE_TAG,DOMAIN,KIS_MY_APP,KIS_MY_SEC,KIS_MY_HTSID,KIS_MY_ACCT_STOCK,KIS_MY_PROD
           script: |
+            set -e
             mkdir -p ~/Trading/data
             cd ~/Trading
+
+            # .env 파일 존재 유무 검증 (마운트 오류 방지)
+            if [ ! -f .env ]; then
+              echo "Error: .env file is missing. Please run Setup Server workflow first."
+              exit 1
+            fi
+
             # GHCR 로그인 (sudo 사용)
             echo "${{ secrets.CR_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
@@ -109,6 +117,7 @@ jobs:
             my_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
             EOF
 
+            sudo -E docker compose down
             sudo -E docker compose pull
             sudo -E docker compose up -d
 

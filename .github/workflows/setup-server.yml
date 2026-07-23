@@ -44,6 +44,7 @@ jobs:
           key: ${{ secrets.OCI_SSH_KEY }}
           envs: DOMAIN,EMAIL,KIS_MY_APP,KIS_MY_SEC,KIS_MY_HTSID,KIS_MY_ACCT_STOCK,KIS_MY_PROD
           script: |
+            set -e
             mkdir -p ~/Trading/data
             cd ~/Trading
             
