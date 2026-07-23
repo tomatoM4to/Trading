@@ -96,7 +96,7 @@ jobs:
             fi
 
             # GHCR 로그인 (sudo 사용)
-            echo "${{ secrets.CR_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "${{ secrets.CR_PAT }}" | sudo -E docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
             # 환경 변수 설정 및 배포 (sudo -E 사용)
             export IMAGE_TAG=$IMAGE_TAG
