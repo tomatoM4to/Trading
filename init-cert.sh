@@ -13,7 +13,7 @@ if [ -z "$DOMAIN" ] || [ -z "$EMAIL" ]; then
 fi
 
 # Certbot 컨테이너를 일회성(--rm)으로 실행하여 인증서 발급
-docker run -it --rm --name certbot \
+docker run --rm --name certbot \
   -p 80:80 \
   -v "$(pwd)/.nginx/certbot/conf:/etc/letsencrypt" \
   -v "$(pwd)/.nginx/certbot/www:/var/www/certbot" \
@@ -23,5 +23,4 @@ docker run -it --rm --name certbot \
   --agree-tos \
   --no-eff-email
 
-echo "인증서 초기 발급 완료! 서비스를 (재)시작합니다."
-docker compose up -d
+echo "인증서 초기 발급 완료! (서비스 시작은 deploy.yml에서 진행됩니다)"
