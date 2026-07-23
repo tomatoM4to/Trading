@@ -79,22 +79,29 @@ async def fetch_minute_data(
 
 
 async def process_ticker(
-    ticker: str, last_datetime: str | None = None
+    ticker: str,
+    last_datetime: str | None = None,
+    limit_days: int = 3,
+    max_steps: int = 15,
 ) -> tuple[bool, str | None]:
     """
     단일 종목의 분봉 데이터를 가져와 DB에 UPSERT합니다.
-    last_datetime (YYYYMMDDHHMMSS) 가 주어지면, 해당 시간 이전의 데이터는 무시하고 API 호출(15-step)을 조기 종료합니다.
+    last_datetime (YYYYMMDDHHMMSS) 가 주어지면, 해당 시간 이전의 데이터는 무시하고 API 호출을 조기 종료합니다.
     Returns: (성공여부, 이번 수집에서 확인한 가장 최신 분봉의 datetime 문자열)
     """
     now = datetime.now()
     target_date = now.strftime("%Y%m%d")
     target_time = now.strftime("%H%M00")
+    cutoff_date = (now - timedelta(days=limit_days)).strftime("%Y%m%d")
 
     success_any = False
     newest_dt: str | None = None
 
-    # 최대 15번 연속 조회 (15-step backfill)
-    for _ in range(15):
+    # 최대 max_steps 번 연속 조회
+    for _ in range(max_steps):
+        if target_date < cutoff_date:
+            break
+
         df = await fetch_minute_data(ticker, target_date, target_time)
         if df.empty:
             break
@@ -176,6 +183,83 @@ async def process_ticker(
     return success_any, newest_dt
 
 
+async def run_minute_backfill_task(
+    markets: list[str] | None = None, limit_days: int = 3
+):
+    if not markets:
+        markets = ["KOSPI", "KOSDAQ"]
+
+    market_str = ", ".join(markets)
+    logger.info(
+        f"Starting Asynchronous Minute OHLCV Backfill for {market_str} (limit_days={limit_days})..."
+    )
+
+    last_times = get_minute_last_times(markets)
+
+    conn = connect_sqlite()
+    try:
+        cursor = conn.cursor()
+        placeholders = ",".join(["?"] * len(markets))
+        cursor.execute(
+            f"SELECT ticker FROM stock_codes WHERE market IN ({placeholders}) AND is_halted = 0",
+            markets,
+        )
+        tickers = [row["ticker"] for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Failed to fetch tickers for backfill: {e}")
+        return
+    finally:
+        conn.close()
+
+    queue = asyncio.Queue()
+    for ticker in tickers:
+        queue.put_nowait({"ticker": ticker, "requeue_count": 0})
+
+    success_count = 0
+    fail_count = 0
+
+    async def worker(w_queue: asyncio.Queue):
+        nonlocal success_count, fail_count
+        while True:
+            try:
+                item = await w_queue.get()
+            except asyncio.CancelledError:
+                break
+
+            ticker = item["ticker"]
+            requeue_count = item["requeue_count"]
+            last_dt = last_times.get(ticker)
+
+            try:
+                # 백필 모드: max_steps=15
+                success, newest_dt = await process_ticker(
+                    ticker, last_dt, limit_days=limit_days, max_steps=15
+                )
+                success_count += 1
+                if (success_count + fail_count) % 500 == 0:
+                    logger.info(
+                        f"[Backfill Progress] {success_count + fail_count}/{len(tickers)} tickers processed..."
+                    )
+            except Exception:
+                if requeue_count < 3:
+                    item["requeue_count"] += 1
+                    await asyncio.sleep(0.5)
+                    await w_queue.put(item)
+                else:
+                    fail_count += 1
+            finally:
+                w_queue.task_done()
+
+    workers = [asyncio.create_task(worker(queue)) for _ in range(50)]
+    await queue.join()
+    for w in workers:
+        w.cancel()
+
+    logger.info(
+        f"Asynchronous Backfill Finished. Success: {success_count}, Fail: {fail_count}."
+    )
+
+
 async def run_minute_ohlcv_scheduler(
     markets: list[str] | None = None, single_cycle: bool = False
 ):
@@ -243,7 +327,10 @@ async def run_minute_ohlcv_scheduler(
                 last_datetime = last_times.get(ticker)
 
                 try:
-                    success, newest_dt = await process_ticker(ticker, last_datetime)
+                    # 실시간 모드: 가장 최신 분봉 1페이지만 가볍게 폴링
+                    success, newest_dt = await process_ticker(
+                        ticker, last_datetime, max_steps=1
+                    )
                     if newest_dt:
                         last_times[ticker] = (
                             newest_dt  # 메모리 업데이트 (중복 Backfill 방지)

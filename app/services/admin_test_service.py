@@ -6,7 +6,9 @@ from fastapi import HTTPException
 from services.admin_daily_service import verify_daily_integrity_service
 from services.admin_minute_service import verify_minute_integrity_service
 from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
-from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
+from tasks.minute_ohlcv_scheduler import (
+    run_minute_backfill_task,
+)
 
 
 async def test_daily_scheduler_integration_service():
@@ -177,8 +179,8 @@ async def test_minute_scheduler_integration_service():
 
         results = {"target_stocks": [s["ticker"] for s in target_stocks]}
 
-        # 4. [검증 1] 콜드스타트 (1 Cycle만 실행)
-        await run_minute_ohlcv_scheduler(markets=["KOSPI", "KOSDAQ"], single_cycle=True)
+        # 4. [검증 1] 콜드스타트 백필 실행
+        await run_minute_backfill_task(markets=["KOSPI", "KOSDAQ"], limit_days=3)
 
         conn_test = connect_sqlite()
         try:
@@ -213,8 +215,8 @@ async def test_minute_scheduler_integration_service():
         finally:
             conn_test.close()
 
-        # 갭필 복구 (1 Cycle)
-        await run_minute_ohlcv_scheduler(markets=["KOSPI", "KOSDAQ"], single_cycle=True)
+        # 갭필 복구
+        await run_minute_backfill_task(markets=["KOSPI", "KOSDAQ"], limit_days=3)
 
         conn_test = connect_sqlite()
         try:
