@@ -39,8 +39,8 @@ def get_kosdaq_master_dataframe(base_dir):
     tmp_fil1 = os.path.join(base_dir, "kosdaq_code_part1.tmp")
     tmp_fil2 = os.path.join(base_dir, "kosdaq_code_part2.tmp")
 
-    wf1 = open(tmp_fil1, mode="w")
-    wf2 = open(tmp_fil2, mode="w")
+    wf1 = open(tmp_fil1, mode="w", encoding="cp949")
+    wf2 = open(tmp_fil2, mode="w", encoding="cp949")
 
     with open(file_name, encoding="cp949") as f:
         for row in f:
