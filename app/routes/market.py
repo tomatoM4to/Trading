@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 
 from core.kis_fetch import async_kis_fetch
 from fastapi import APIRouter, HTTPException
+from schemas.market import ChartDataResponse, TopVolumeResponse
+from services.market_service import get_chart_data, get_top_volume_tickers
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -70,3 +72,20 @@ async def get_samsung_ohlcv():
         "data_count": len(results),
         "data": results,
     }
+
+
+@router.get("/screener/top-volume", response_model=TopVolumeResponse)
+async def get_top_volume():
+    """
+    최근 영업일 기준 거래대금/거래량 상위 30개 종목을 조회합니다.
+    """
+    return await get_top_volume_tickers(limit=30)
+
+
+@router.get("/chart/{ticker}", response_model=ChartDataResponse)
+async def get_chart(ticker: str, days: int = 3, type: str = "minute"):
+    """
+    특정 종목의 차트 데이터 및 다중 주기 이평선 데이터를 조회합니다.
+    type: 'minute' (분봉) 또는 'daily' (일봉)
+    """
+    return await get_chart_data(ticker, days=days, timeframe=type)

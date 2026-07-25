@@ -8,6 +8,7 @@ from core.kis_fetch import start_q_worker, stop_q_worker
 from core.logging import setup_logging
 from core.scheduler import SystemScheduler
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from routes import admin, market
 
 setup_logging()
@@ -79,6 +80,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Trading Server",
     lifespan=lifespan,
+)
+
+# FastAPI CORS configuration
+# Source: https://fastapi.tiangolo.com/tutorial/cors/
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(market.router)

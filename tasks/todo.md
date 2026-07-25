@@ -1,11 +1,7 @@
-# Task List
-
-## Phase 1: Overlap-Aware Core Logic
-- [x] Task 1: Update `process_ticker` in `app/tasks/minute_ohlcv_scheduler.py`
-  - Restore `max_steps=15` as the default.
-  - Fix the midnight bug: if `df.empty`, decrement `target_date` by 1 day, set `target_time="153000"`, and `continue` instead of `break`.
-  - Implement Early Exit: if `df["dt_str"].min() <= last_datetime`, filter the dataframe to `> last_datetime`, save, and `break`.
-
-## Phase 2: Refactoring and Clean Up
-- [x] Task 2: Remove `run_minute_backfill_task` from `app/tasks/minute_ohlcv_scheduler.py`.
-- [x] Task 3: Update `app/core/bootstrap.py` to remove the background task creation for backfilling and ensure the main scheduler is started without waiting for 08:55.
+- [x] **Task 1: `extractLineSeriesData` 리팩토링 (web/lib/chart-utils.ts)**
+  - 파라미터에 `timeframe` 추가
+  - 캔들 그룹핑과 동일한 알고리즘을 사용하여 LineSeries의 시간축(Time) 그룹화
+  - 그룹의 마지막 값을 이평선 값으로 추출
+- [x] **Task 2: `ChartContainer` 업데이트 (web/components/chart/ChartContainer.tsx)**
+  - `extractLineSeriesData` 호출 시 현재의 `timeframe` 상태값 전달
+  - `useMemo` 의존성 배열 업데이트

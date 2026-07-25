@@ -10,6 +10,7 @@
     - **DB 및 스키마 작업**: `docs/database.md`
     - **워커 및 스케줄러 작업**: `docs/scheduler.md`
     - **라우터 및 API 통신 작업**: `docs/endpoint.md`
+    - **프론트엔드 및 UI 작업**: `docs/frontend.md`
 - 🛠️ **에이전트 스킬 활용 원칙 (Meta-Skills & Custom Skills)**:
   - 사용자가 명시적으로 스킬을 지정하지 않더라도, 항상 내장된 **`using-agent-skills`** 메타 스킬을 기본(Default)으로 적용하여 현재 작업 단계(Phase)에 맞는 최적의 스킬(예: `spec-driven-development`, `incremental-implementation` 등)을 스스로 선택하고 그 워크플로우를 따른다.
   - Pandas 기반의 데이터 처리/분석(DataFrame 등) 작업 시, 항상 내장된 **`pandas-pro`** 스킬의 가이드라인을 최우선으로 적용한다.
