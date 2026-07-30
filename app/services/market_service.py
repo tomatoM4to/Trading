@@ -77,8 +77,8 @@ async def get_chart_data(ticker: str, days: int = 3, timeframe: str = "minute") 
                     close as ma_daily_1,
                     AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) as ma_daily_5,
                     AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as ma_daily_20,
-                    AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 99 PRECEDING AND CURRENT ROW) as ma_daily_100,
-                    AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 199 PRECEDING AND CURRENT ROW) as ma_daily_200
+                    AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) as ma_daily_60,
+                    AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) as ma_daily_120
                 FROM daily_ohlcv
                 WHERE ticker = ?
                 ORDER BY date ASC
@@ -99,12 +99,12 @@ async def get_chart_data(ticker: str, days: int = 3, timeframe: str = "minute") 
                         low=r["low"],
                         close=r["close"],
                         volume=r["volume"],
-                        ma1=None, ma3=None, ma5=None, ma15=None, ma30=None, ma60=None,
+                        ma1=None, ma5=None, ma10=None, ma20=None, ma60=None, ma120=None,
                         ma_daily_1=r["ma_daily_1"],
                         ma_daily_5=r["ma_daily_5"],
                         ma_daily_20=r["ma_daily_20"],
-                        ma_daily_100=r["ma_daily_100"],
-                        ma_daily_200=r["ma_daily_200"],
+                        ma_daily_60=r["ma_daily_60"],
+                        ma_daily_120=r["ma_daily_120"],
                     )
                 )
 
@@ -125,8 +125,8 @@ async def get_chart_data(ticker: str, days: int = 3, timeframe: str = "minute") 
                         close as ma_daily_1,
                         AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) as ma_daily_5,
                         AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as ma_daily_20,
-                        AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 99 PRECEDING AND CURRENT ROW) as ma_daily_100,
-                        AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 199 PRECEDING AND CURRENT ROW) as ma_daily_200
+                        AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) as ma_daily_60,
+                        AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) as ma_daily_120
                     FROM daily_ohlcv
                     WHERE ticker = ?
                 ),
@@ -135,18 +135,18 @@ async def get_chart_data(ticker: str, days: int = 3, timeframe: str = "minute") 
                         date,
                         time,
                         open, high, low, close, volume,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) as ma3,
                         AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) as ma5,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 14 PRECEDING AND CURRENT ROW) as ma15,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as ma30,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) as ma60
+                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) as ma10,
+                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as ma20,
+                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) as ma60,
+                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) as ma120
                     FROM minute_ohlcv
                     WHERE ticker = ?
                 )
                 SELECT 
                     m.date, m.time, m.open, m.high, m.low, m.close, m.volume,
-                    m.ma3, m.ma5, m.ma15, m.ma30, m.ma60,
-                    d.ma_daily_1, d.ma_daily_5, d.ma_daily_20, d.ma_daily_100, d.ma_daily_200
+                    m.ma5, m.ma10, m.ma20, m.ma60, m.ma120,
+                    d.ma_daily_1, d.ma_daily_5, d.ma_daily_20, d.ma_daily_60, d.ma_daily_120
                 FROM minute_ma m
                 LEFT JOIN daily_ma d ON m.date = d.date
                 WHERE m.date >= ?
@@ -169,16 +169,16 @@ async def get_chart_data(ticker: str, days: int = 3, timeframe: str = "minute") 
                         close=r["close"],
                         volume=r["volume"],
                         ma1=r["close"],  # 1분 이평선은 현재가(종가) 자체
-                        ma3=r["ma3"],
                         ma5=r["ma5"],
-                        ma15=r["ma15"],
-                        ma30=r["ma30"],
+                        ma10=r["ma10"],
+                        ma20=r["ma20"],
                         ma60=r["ma60"],
+                        ma120=r["ma120"],
                         ma_daily_1=r["ma_daily_1"],
                         ma_daily_5=r["ma_daily_5"],
                         ma_daily_20=r["ma_daily_20"],
-                        ma_daily_100=r["ma_daily_100"],
-                        ma_daily_200=r["ma_daily_200"],
+                        ma_daily_60=r["ma_daily_60"],
+                        ma_daily_120=r["ma_daily_120"],
                     )
                 )
 

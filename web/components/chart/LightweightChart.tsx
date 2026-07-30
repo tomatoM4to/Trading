@@ -5,17 +5,17 @@ import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickSeries, LineS
 import { AggregatedCandle, LineDataPoint } from "../../lib/chart-utils";
 
 export const MA_CONFIGS: Record<string, { color: string; title: string; lineWidth?: number }> = {
-  ma1: { color: "#ffeb3b", title: "1m" },
-  ma3: { color: "#ffcf9f", title: "3m" },
+  ma1: { color: "#ffeb3b", title: "1m (Debug)" },
   ma5: { color: "#ff9f4f", title: "5m" },
-  ma15: { color: "#ff6f00", title: "15m" },
-  ma30: { color: "#df4f00", title: "30m" },
-  ma60: { color: "#bf2f00", title: "1h" },
-  ma_daily_1: { color: "#8bc34a", title: "1D", lineWidth: 2 },
-  ma_daily_5: { color: "#4caf50", title: "1W (5d)", lineWidth: 2 },
-  ma_daily_20: { color: "#2196f3", title: "1M (20d)", lineWidth: 2 },
-  ma_daily_100: { color: "#3f51b5", title: "100d", lineWidth: 3 },
-  ma_daily_200: { color: "#9c27b0", title: "200d", lineWidth: 3 },
+  ma10: { color: "#ff6f00", title: "10m" },
+  ma20: { color: "#df4f00", title: "20m" },
+  ma60: { color: "#bf2f00", title: "60m" },
+  ma120: { color: "#9c27b0", title: "120m" },
+  ma_daily_1: { color: "#8bc34a", title: "1D (Debug)", lineWidth: 2 },
+  ma_daily_5: { color: "#4caf50", title: "5d", lineWidth: 2 },
+  ma_daily_20: { color: "#2196f3", title: "20d", lineWidth: 2 },
+  ma_daily_60: { color: "#3f51b5", title: "60d", lineWidth: 3 },
+  ma_daily_120: { color: "#9c27b0", title: "120d", lineWidth: 3 },
 };
 
 interface LightweightChartProps {

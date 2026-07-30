@@ -31,14 +31,35 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
   const [error, setError] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState<string>("1");
   const [visibleMAs, setVisibleMAs] = useState<Record<string, boolean>>({
-    ma3: true,
-    ma15: true,
+    ma1: false,
+    ma5: true,
+    ma10: true,
+    ma20: true,
+    ma60: true,
+    ma120: true,
     ma_daily_1: false,
-    ma_daily_5: true,
-    ma_daily_20: true,
+    ma_daily_5: false,
+    ma_daily_20: false,
+    ma_daily_60: false,
+    ma_daily_120: false,
   });
 
   const isDailyTF = DAILY_TIMEFRAMES.some(tf => tf.value === timeframe);
+
+  useEffect(() => {
+    setVisibleMAs(prev => ({
+      ...prev,
+      ma5: !isDailyTF,
+      ma10: !isDailyTF,
+      ma20: !isDailyTF,
+      ma60: !isDailyTF,
+      ma120: !isDailyTF,
+      ma_daily_5: isDailyTF,
+      ma_daily_20: isDailyTF,
+      ma_daily_60: isDailyTF,
+      ma_daily_120: isDailyTF,
+    }));
+  }, [isDailyTF]);
 
   useEffect(() => {
     async function fetchData() {

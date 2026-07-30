@@ -22,18 +22,18 @@ class ChartDataPoint(BaseModel):
 
     # 단기 이동평균선 (분봉 기준)
     ma1: float | None = None
-    ma3: float | None = None
     ma5: float | None = None
-    ma15: float | None = None
-    ma30: float | None = None
+    ma10: float | None = None
+    ma20: float | None = None
     ma60: float | None = None
+    ma120: float | None = None
 
     # 장기 이동평균선 (일봉 기준 매핑)
     ma_daily_1: float | None = None
     ma_daily_5: float | None = None
     ma_daily_20: float | None = None
-    ma_daily_100: float | None = None
-    ma_daily_200: float | None = None
+    ma_daily_60: float | None = None
+    ma_daily_120: float | None = None
 
 
 class ChartDataResponse(BaseModel):
