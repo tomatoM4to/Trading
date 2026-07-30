@@ -24,6 +24,12 @@ Trading Server 프로젝트의 프론트엔드는 KIS OpenAPI를 통해 백엔�
 - 구간 내의 **가장 마지막 유효한 값**을 추출하여 해당 캔들과 정확히 일치하는 타임스탬프로 차트에 삽입합니다.
 - 관련 ADR: `docs/decisions/ADR-011-chart-perfect-time-synchronization.md`
 
+### 3. Smart Default UI (이평선 자동 토글)
+차트 가독성과 스케일 왜곡을 방지하기 위해, 사용자가 선택한 타임프레임(분봉 vs 일봉)에 맞춰 관련 이동평균선(MA) 체크박스가 자동으로 On/Off 되는 스마트 디폴트 로직이 적용되어 있습니다.
+- **분봉(1m~60m) 선택 시**: 분봉 이평선(5m, 10m, 20m, 60m, 120m) 자동 On, 일봉 이평선 자동 Off
+- **일봉(1D~) 선택 시**: 일봉 이평선(5d, 20d, 60d, 120d) 자동 On, 분봉 이평선 자동 Off
+- 관련 ADR: `docs/decisions/ADR-013-smart-default-moving-averages.md`
+
 ## UI & Layout Structure
 
 ### 1. Dark Mode & Aesthetics
