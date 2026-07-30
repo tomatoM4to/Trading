@@ -4,7 +4,7 @@
       "command": "uv",
       "args": [
         "--directory",
-        "kis-code-assistant-mcp",
+        "open-trading-api/MCP/KIS Code Assistant MCP",
         "run",
         "server.py",
         "--stdio"

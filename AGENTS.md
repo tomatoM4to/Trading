@@ -68,3 +68,7 @@
 - **자동 배포**: `.github/workflows/deploy.yml` (`main` Push 트리거). 도커 이미지 빌드 후 서버로 전송하며, 시크릿 변수 갱신을 위해 `kis_devlp.yaml`을 재생성한 뒤 `docker compose up -d`를 수행한다. (Sudo 권한 상승 시 환경 변수 유실을 막기 위해 `sudo -E` 활용)
 - **설정 파일 동적 생성 원칙**: `.env` 및 `kis_devlp.yaml`은 보안상 `.gitignore`에 등록되어 도커 이미지에 포함되지 않으므로, GitHub Actions가 SSH 접속 시 GitHub Secrets 값을 이용해 서버에 직접 동적 생성(Echo/Cat)하고 도커 볼륨으로 마운트하는 패턴을 유지한다. (참고: `docs/decisions/ADR-006-dynamic-config-generation.md`)
 - **Docker 데이터 영속성 원칙**: OCI 서버에 배포 시 도커 컨테이너 내의 코드를 호스트의 빈 폴더로 덮어쓰는 행위나 SQLite WAL 모드를 단일 파일로 마운트하는 행위를 엄격히 금지하며, 반드시 전용 데이터 폴더(`./data:/app/data`)를 마운트한다. (참고: `docs/decisions/ADR-005-docker-sqlite-persistence-strategy.md`)
+
+## 8. 외부 의존성 및 MCP 관리 (External Dependencies)
+- **Git Submodule 원칙**: 외부에서 제공되는 MCP(Model Context Protocol) 서버 코드나 타 레포지토리의 소스 코드는 직접 복사/붙여넣기하여 프로젝트에 하드코딩하지 않습니다. 반드시 `git submodule`을 통해 연동하여 메인 프로젝트의 Git 로그 오염을 방지하고 공식 업스트림의 업데이트 추적을 용이하게 합니다.
+- **Sparse-Checkout 적용**: 무거운 원본 레포지토리 전체가 워크스페이스를 어지럽히지 않도록, `git sparse-checkout`을 적용하여 필요한 특정 하위 폴더(예: `MCP/KIS Code Assistant MCP`)만 로컬에 노출시키는 패턴을 유지합니다. (참고: `docs/decisions/ADR-012-mcp-submodule-migration.md`)
