@@ -50,7 +50,9 @@ async def get_top_volume_tickers(limit: int = 30) -> TopVolumeResponse:
         conn.close()
 
 
-async def get_chart_data(ticker: str, days: int = 3, timeframe: str = "minute") -> ChartDataResponse:
+async def get_chart_data(
+    ticker: str, days: int = 3, timeframe: str = "minute"
+) -> ChartDataResponse:
     """
     특정 종목의 다중 주기 이평선이 포함된 데이터를 반환합니다.
     timeframe: 'minute' (분봉) 또는 'daily' (일봉)
@@ -85,12 +87,12 @@ async def get_chart_data(ticker: str, days: int = 3, timeframe: str = "minute") 
             """
             cursor.execute(query, (ticker,))
             rows = cursor.fetchall()
-            
+
             for r in rows:
                 date_str = r["date"]
                 time_str = r["time"]
                 formatted_time = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} {time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
-                
+
                 data_points.append(
                     ChartDataPoint(
                         time=formatted_time,
@@ -99,7 +101,12 @@ async def get_chart_data(ticker: str, days: int = 3, timeframe: str = "minute") 
                         low=r["low"],
                         close=r["close"],
                         volume=r["volume"],
-                        ma1=None, ma5=None, ma10=None, ma20=None, ma60=None, ma120=None,
+                        ma1=None,
+                        ma5=None,
+                        ma10=None,
+                        ma20=None,
+                        ma60=None,
+                        ma120=None,
                         ma_daily_1=r["ma_daily_1"],
                         ma_daily_5=r["ma_daily_5"],
                         ma_daily_20=r["ma_daily_20"],

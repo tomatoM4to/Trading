@@ -52,11 +52,12 @@
   ```
 
 ## 5. 절대 원칙 (Boundaries)
-- **메모리 제한**: 1GB RAM 환경이므로 전 종목(2,400개) 데이터를 한 번에 메모리에 올리거나 Pandas로 대규모 병합(Merge)하는 로직을 절대 작성하지 않는다. (항상 Chunk 단위나 SQLite 내부 쿼리로 해결할 것)
-- **API Rate Limit 방어**: KIS API의 초당 20회 통신 제한을 방어하는 `Global Rate-Limiting Queue`의 딜레이 시간(`sleep(0.1)`)을 임의로 줄이거나 삭제하지 않는다.
+- **메모리 제한 (Set-Theory Pipeline)**: 1GB RAM 환경이므로 전 종목(2,400개) 데이터를 한 번에 메모리에 올리거나 Pandas로 대규모 병합(Merge)하는 로직을 절대 작성하지 않는다. 스크리너나 다중 지표 교집합 연산을 수행할 때는 반드시 **종목 코드 집합(`Set[str]`) 단위로만 데이터를 교환하고, 파이썬 내장 `&` (교집합) 연산**으로 메모리 사용을 최소화한다. (참고: `ADR-014`)
+- **API Rate Limit 방어**: KIS API의 초당 20회 통신 제한을 방어하는 `Global Rate-Limiting Queue`의 딜레이 시간(`sleep(0.1)`)을 임의로 줄이거나 삭제하지 않는다. 스크리너 연산 시 외부 수급 API 등은 '지연 평가(Late Evaluation)' 또는 '랭킹 Bulk 호출'로 N+1 문제를 원천 차단한다.
 - **보안 및 자격 증명**: `.env` 파일의 내용이나 KIS API Secret 정보를 소스 코드에 절대 하드코딩하지 않는다.
 
 ## 6. 핵심 코드 패턴 (Patterns)
+- **SQLite Push-down**: 이평선 연속 우상향 등 기술적 지표 필터링은 파이썬으로 데이터를 가져오지 않고, SQLite Window Function(`LAG`, `ROW_NUMBER` 등)과 CTE를 활용해 DB 엔진 단에서 조건을 판별(Push-down)하고 결과 Ticker만 반환하도록 작성한다.
 - **로깅 규칙**: 스케줄러 및 백그라운드 작업의 로깅은 표준 `info` 대신 반드시 커스텀 레벨인 `logger.sched(...)`를 사용하여 로그 가독성을 유지한다.
 - **API 래퍼 사용**: KIS OpenAPI 호출 결과는 반드시 사전에 정의된 `APIResp` 객체(내부 `DotDict` 포함)로 래핑하여 파이썬 점 표기법(Dot-notation)으로 일관성 있게 다룬다.
 - **UI/UX 원칙 (Smart Defaults)**: 강제 제약(Systematic restriction)보다는 사용자의 편의를 돕는 '스마트 디폴트' 패턴을 지향한다. (예: 타임프레임 전환 시 관련 이평선 자동 On/Off)

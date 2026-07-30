@@ -9,7 +9,7 @@ from core.logging import setup_logging
 from core.scheduler import SystemScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes import admin, market
+from routes import admin, market, screener
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ app.add_middleware(
 
 app.include_router(market.router)
 app.include_router(admin.router)
+app.include_router(screener.router)
 
 
 @app.get("/")
