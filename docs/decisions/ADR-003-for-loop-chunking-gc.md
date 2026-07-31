@@ -1,7 +1,7 @@
 # ADR-003: For-Loop Chunking Strategy for Garbage Collection
 
 ## Status
-Accepted
+Superseded by ADR-015
 
 ## Date
 2026-07-12

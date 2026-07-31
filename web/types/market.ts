@@ -1,13 +1,3 @@
-export interface TopVolumeItem {
-  ticker: string;
-  name: string;
-  volume: number;
-}
-
-export interface TopVolumeResponse {
-  date: string;
-  items: TopVolumeItem[];
-}
 
 export interface ChartDataPoint {
   time: string; // "YYYY-MM-DD HH:MM:SS" 형식

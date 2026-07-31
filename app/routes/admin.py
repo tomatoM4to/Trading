@@ -15,6 +15,7 @@ from services.admin_test_service import (
 router = APIRouter()
 test_router = APIRouter(prefix="/admin/test", tags=["Admin (Test)"])
 live_router = APIRouter(prefix="/admin/live", tags=["Admin (Live Status)"])
+action_router = APIRouter(prefix="/admin/action", tags=["Admin (Actions)"])
 
 
 class DataTypeEnum(StrEnum):
@@ -60,5 +61,17 @@ def get_ticker_status(
     return get_ticker_status_service(ticker, data_type.value, conn)
 
 
+@action_router.post("/gc")
+async def trigger_garbage_collection():
+    """
+    명시적으로 일봉/분봉 가비지 컬렉터(For Loop Chunking GC)를 실행합니다.
+    """
+    from core.scheduler import SystemScheduler
+
+    await SystemScheduler().cleanup_ohlcv_job()
+    return {"message": "Garbage collection completed successfully."}
+
+
 router.include_router(test_router)
 router.include_router(live_router)
+router.include_router(action_router)

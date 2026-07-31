@@ -17,3 +17,5 @@ KIS20*
 data/
 
 .env
+
+logs.txt
