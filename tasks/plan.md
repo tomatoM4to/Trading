@@ -1,20 +1,20 @@
-# Implementation Plan: Fix GC SQL Bug & Add Manual GC Endpoint
+# Implementation Plan: Strict MA Count Check
 
-## Overview
-We need to fix a critical SQL syntax error in the daily Garbage Collector where it queried a non-existent `code` column instead of the correct `ticker` column. Additionally, we need to expose a new endpoint in the admin router to explicitly trigger this GC process on-demand.
+## Objective
+Update moving average calculations in `screener_service.py` and `market_service.py` to return `NULL` if the required number of candles is not met, using SQLite window functions.
 
-## Architecture Decisions
-- Add a new endpoint to the admin router (`app/routes/admin.py`). We will use a `POST /admin/action/gc` endpoint for triggering the action.
-- The endpoint will reuse the existing `cleanup_ohlcv_job()` logic from `SystemScheduler` to ensure it follows the exact same logic (Chunking GC) as the scheduled task.
+## Implementation Details
 
-## Task List
+1.  **`screener_service.py` (`_handle_ma_uptrend`)**:
+    *   Currently, the dynamic SQL builds `AVG(...) OVER(...) as maX`.
+    *   Change this to: `CASE WHEN COUNT(...) OVER(...) = N THEN AVG(...) OVER(...) ELSE NULL END as maX`.
+    *   The `HAVING` clause `SUM(maX_up) = days` will automatically filter out rows where `maX` is `NULL` (since `NULL > ...` is `NULL`, and `SUM` won't meet the target).
 
-### Phase 1: Fix GC SQL Bug
-- [ ] Task 1: Fix column name in `app/core/scheduler.py`. Change `SELECT code FROM stock_codes` to `SELECT ticker FROM stock_codes`.
+2.  **`market_service.py` (`get_chart_data`)**:
+    *   Update the `daily_ma` CTE and the main query for `minute_ma`.
+    *   Change every `AVG(...)` to the `CASE WHEN COUNT(...) = N THEN AVG(...) ELSE NULL END` format.
+    *   This ensures the chart data (open, high, low, close) is still returned for every candle, but the MA fields will explicitly be `NULL` if the candle count is insufficient.
 
-### Phase 2: Add Manual GC Endpoint
-- [ ] Task 2: Add the endpoint to `app/routes/admin.py` which will invoke `SystemScheduler().cleanup_ohlcv_job()`.
-
-## Checkpoint: Complete
-- [ ] Ensure the syntax is correct.
-- [ ] Check if the endpoint is properly hooked up to the FastAPI router.
+## Verification
+*   Test `/admin/live/global-status` or chart viewer to ensure no crashes.
+*   Check a new stock to verify `null` values for long MAs.

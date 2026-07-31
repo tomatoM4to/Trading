@@ -50,13 +50,17 @@ class ScreenerEngine:
         """티커 Set을 받아 이름이 포함된 딕셔너리 리스트로 변환합니다."""
         if not tickers:
             return []
-            
+
         from core.database import connect_sqlite
+
         conn = connect_sqlite()
         cursor = conn.cursor()
         try:
             placeholders = ",".join("?" for _ in tickers)
-            cursor.execute(f"SELECT ticker, name FROM stock_codes WHERE ticker IN ({placeholders})", tuple(tickers))
+            cursor.execute(
+                f"SELECT ticker, name FROM stock_codes WHERE ticker IN ({placeholders})",
+                tuple(tickers),
+            )
             rows = cursor.fetchall()
             return [{"ticker": r[0], "name": r[1]} for r in rows]
         finally:
@@ -87,13 +91,13 @@ class ScreenerEngine:
             "ma120": 119,
         }
 
-        is_daily = any("daily" in l for l in lines)
+        is_daily = any("daily" in ma_line for ma_line in lines)
         table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
         order_clause = "date ASC" if is_daily else "date ASC, time ASC"
         order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
 
         # 2. 가장 긴 이평선에 맞춰 필요한 최근 N개의 Row 수 계산
-        max_window = max(windows.get(l, 0) for l in lines)
+        max_window = max(windows.get(ma_line, 0) for ma_line in lines)
         required_rows = max_window + days + 1
 
         # 3. SELECT 구문 동적 생성
@@ -101,15 +105,17 @@ class ScreenerEngine:
         trend_selects = []
         having_clauses = []
 
-        for l in lines:
-            w = windows.get(l, 0)
+        for ma_line in lines:
+            w = windows.get(ma_line, 0)
             ma_selects.append(
-                f"AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) as {l}"
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"ELSE NULL END as {ma_line}"
             )
             trend_selects.append(
-                f"({l} > LAG({l}, 1) OVER(PARTITION BY ticker ORDER BY {order_clause})) as {l}_up"
+                f"({ma_line} > LAG({ma_line}, 1) OVER(PARTITION BY ticker ORDER BY {order_clause})) as {ma_line}_up"
             )
-            having_clauses.append(f"SUM({l}_up) = {days}")
+            having_clauses.append(f"SUM({ma_line}_up) = {days}")
 
         ma_select_str = ",\n                ".join(ma_selects)
         trend_select_str = ",\n                ".join(trend_selects)
@@ -124,13 +130,13 @@ class ScreenerEngine:
             ) WHERE rn <= {required_rows}
         ),
         calc_ma AS (
-            SELECT 
+            SELECT
                 *,
                 {ma_select_str}
             FROM recent_data
         ),
         trend AS (
-            SELECT 
+            SELECT
                 *,
                 {trend_select_str}
             FROM calc_ma

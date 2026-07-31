@@ -72,15 +72,15 @@ async def get_chart_data(
         if timeframe == "daily":
             # 일봉 전체 데이터 쿼리
             query = """
-                SELECT 
+                SELECT
                     date,
                     '153000' as time,
                     open, high, low, close, volume,
                     close as ma_daily_1,
-                    AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) as ma_daily_5,
-                    AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as ma_daily_20,
-                    AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) as ma_daily_60,
-                    AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) as ma_daily_120
+                    CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) = 5 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_5,
+                    CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) = 20 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_20,
+                    CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) = 60 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_60,
+                    CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_120
                 FROM daily_ohlcv
                 WHERE ticker = ?
                 ORDER BY date ASC
@@ -127,13 +127,13 @@ async def get_chart_data(
             # 3. 통합 차트 쿼리 (Daily CTE + Minute CTE)
             query = """
                 WITH daily_ma AS (
-                    SELECT 
+                    SELECT
                         date,
                         close as ma_daily_1,
-                        AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) as ma_daily_5,
-                        AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as ma_daily_20,
-                        AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) as ma_daily_60,
-                        AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) as ma_daily_120
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) = 5 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_5,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) = 20 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_20,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) = 60 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_60,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_120
                     FROM daily_ohlcv
                     WHERE ticker = ?
                 ),
@@ -142,15 +142,15 @@ async def get_chart_data(
                         date,
                         time,
                         open, high, low, close, volume,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) as ma5,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) as ma10,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as ma20,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) as ma60,
-                        AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) as ma120
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) = 5 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) ELSE NULL END as ma5,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) = 10 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) ELSE NULL END as ma10,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) = 20 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) ELSE NULL END as ma20,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) = 60 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) ELSE NULL END as ma60,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma120
                     FROM minute_ohlcv
                     WHERE ticker = ?
                 )
-                SELECT 
+                SELECT
                     m.date, m.time, m.open, m.high, m.low, m.close, m.volume,
                     m.ma5, m.ma10, m.ma20, m.ma60, m.ma120,
                     d.ma_daily_1, d.ma_daily_5, d.ma_daily_20, d.ma_daily_60, d.ma_daily_120
