@@ -79,32 +79,47 @@ export function ScreenerBuilder() {
   };
 
   const handleRunQuery = async () => {
-    // 클라이언트 UI 상태(timeframe, selected_lines)를 백엔드 요구 스펙(lines)으로 변환
-    const mappedFilters = filters.map(f => {
-      let backendParams = { ...f.params };
+    // 1. 유효성 검사
+    const invalidFilter = filters.find(f => {
       if (f.type === "ma_uptrend") {
-        const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
-        const lines = ((f.params.selected_lines as string[]) || []).map((val: string) => `${prefix}${val}`);
-        backendParams = {
-          lines,
-          days: f.params.days || 1
-        };
+        const days = Number(f.params.days);
+        return isNaN(days) || days < 1;
       }
-      return {
-        type: f.type,
-        params: backendParams
-      };
+      return false;
     });
 
-    const payload: ScreenerRequestPayload = {
-      filters: mappedFilters,
-      operations
-    };
-    
-    console.log("Run Screener with payload:", payload);
-    setIsLoading(true);
-    
+    if (invalidFilter) {
+      alert("연속 상승 기간(Days)은 1 이상의 숫자로 입력해주세요.");
+      return;
+    }
+
     try {
+      // 2. 클라이언트 UI 상태를 백엔드 스펙으로 변환
+      const mappedFilters = filters.map(f => {
+        let backendParams = { ...f.params };
+        
+        if (f.type === "ma_uptrend") {
+          const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
+          const lines = ((f.params.selected_lines as string[]) || []).map((val: string) => `${prefix}${val}`);
+          backendParams = {
+            lines,
+            days: Number(f.params.days)
+          };
+        }
+        
+        return {
+          type: f.type,
+          params: backendParams
+        };
+      });
+
+      const payload: ScreenerRequestPayload = {
+        filters: mappedFilters,
+        operations
+      };
+      
+      console.log("Run Screener with payload:", payload);
+      setIsLoading(true);
       const response = await fetch("http://localhost:8000/api/screener/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -124,9 +139,9 @@ export function ScreenerBuilder() {
       }));
       
       setResults(mappedResults);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to fetch screener results:", error);
-      alert("파이프라인 실행 중 오류가 발생했습니다.");
+      alert(error.message || "파이프라인 실행 중 오류가 발생했습니다.");
     } finally {
       setIsLoading(false);
     }

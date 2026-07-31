@@ -68,9 +68,9 @@ export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
               <SelectValue placeholder="필터 선택" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ma_uptrend">다중 이평선 우상향 (정배열)</SelectItem>
-              <SelectItem value="convergence">이평선 수렴 (Convergence)</SelectItem>
-              <SelectItem value="foreign_buy">외국인 순매수 (Foreign Buy)</SelectItem>
+              <SelectItem value="ma_uptrend">정배열</SelectItem>
+              <SelectItem value="convergence">이평선 수렴</SelectItem>
+              <SelectItem value="foreign_buy">외국인 순매수</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -117,12 +117,12 @@ export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
               </div>
 
               <div className="flex-1 min-w-[100px]">
-                <label className="text-xs font-semibold text-muted-foreground mb-1 block">연속 상승 기간 (Days)</label>
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">기간</label>
                 <Input
                   type="number"
                   min={1}
-                  value={Number(filter.params.days) || ""}
-                  onChange={(e) => handleParamChange("days", parseInt(e.target.value) || 1)}
+                  value={(filter.params.days as string | number) ?? ""}
+                  onChange={(e) => handleParamChange("days", e.target.value)}
                 />
               </div>
             </>
