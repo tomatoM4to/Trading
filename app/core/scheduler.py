@@ -159,56 +159,32 @@ class SystemScheduler:
             logger.error("Scheduled minute OHLCV collector failed: %s", e)
 
     async def cleanup_ohlcv_job(self) -> None:
-        """오후 11시(23:00) 일봉/분봉 가비지 컬렉션 (Chunking 방식).
-        일봉은 종목별 500개, 분봉은 종목별 1560개만 남기고 안전하게 삭제하여 DB 락을 방지합니다.
+        """오후 11시(23:00) 일봉/분봉 가비지 컬렉션 (Time-based Bulk GC).
+        일봉은 300일 이전, 분봉은 7일 이전 데이터를 단일 쿼리로 일괄 삭제합니다.
         """
         from core.database import connect_sqlite
 
         try:
-            logger.sched("Starting OHLCV garbage collection (For Loop Chunking)...")
+            logger.sched("Starting OHLCV garbage collection (Time-based Bulk GC)...")
 
             def _run_gc():
                 conn = connect_sqlite()
                 try:
                     cursor = conn.cursor()
 
-                    cursor.execute("SELECT code FROM stock_codes")
-                    tickers = [row[0] for row in cursor.fetchall()]
+                    # 1. 일봉 GC: 300일 경과 데이터 일괄 삭제 (YYYYMMDD 형식 비교)
+                    cursor.execute(
+                        "DELETE FROM daily_ohlcv WHERE date < strftime('%Y%m%d', 'now', 'localtime', '-300 days')"
+                    )
+                    total_daily_deleted = cursor.rowcount
 
-                    total_daily_deleted = 0
-                    total_minute_deleted = 0
+                    # 2. 분봉 GC: 7일 경과 데이터 일괄 삭제 (YYYYMMDD 형식 비교)
+                    cursor.execute(
+                        "DELETE FROM minute_ohlcv WHERE date < strftime('%Y%m%d', 'now', 'localtime', '-7 days')"
+                    )
+                    total_minute_deleted = cursor.rowcount
 
-                    for ticker in tickers:
-                        # 1. 일봉 GC (500개 유지)
-                        cursor.execute(
-                            "SELECT date FROM daily_ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT 1 OFFSET 499",
-                            (ticker,),
-                        )
-                        result = cursor.fetchone()
-                        if result:
-                            cursor.execute(
-                                "DELETE FROM daily_ohlcv WHERE ticker = ? AND date < ?",
-                                (ticker, result[0]),
-                            )
-                            total_daily_deleted += cursor.rowcount
-
-                        # 2. 분봉 GC (1560개 유지)
-                        cursor.execute(
-                            "SELECT date, time FROM minute_ohlcv WHERE ticker = ? ORDER BY date DESC, time DESC LIMIT 1 OFFSET 1559",
-                            (ticker,),
-                        )
-                        result = cursor.fetchone()
-                        if result:
-                            cutoff_date, cutoff_time = result[0], result[1]
-                            cursor.execute(
-                                "DELETE FROM minute_ohlcv WHERE ticker = ? AND (date < ? OR (date = ? AND time < ?))",
-                                (ticker, cutoff_date, cutoff_date, cutoff_time),
-                            )
-                            total_minute_deleted += cursor.rowcount
-
-                        # 종목 하나 끝날 때마다 트랜잭션 릴리즈하여 전체 Lock 원천 차단
-                        conn.commit()
-
+                    conn.commit()
                     return total_daily_deleted, total_minute_deleted
                 finally:
                     conn.close()
