@@ -139,6 +139,10 @@ export function ScreenerBuilder() {
       });
 
       if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        if (errorData && errorData.detail) {
+          throw new Error(errorData.detail);
+        }
         throw new Error(`API error: ${response.status}`);
       }
 
