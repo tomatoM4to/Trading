@@ -26,8 +26,8 @@ export function ScreenerBuilder() {
   const [filters, setFilters] = useState<FilterNodeState[]>([
     {
       id: "initial-filter-1",
-      type: "ma_uptrend",
-      params: { timeframe: "daily", selected_lines: ["5", "20", "60"], days: 3 }
+      type: "ma_alignment",
+      params: { timeframe: "daily", selected_lines: ["5", "20", "60"], duration: 3 }
     }
   ]);
   const [operations, setOperations] = useState<LogicOp[]>([]);
@@ -40,8 +40,8 @@ export function ScreenerBuilder() {
   const addFilter = () => {
     setFilters([...filters, {
       id: generateId(),
-      type: "ma_uptrend",
-      params: { timeframe: "daily", selected_lines: ["5", "20"], days: 3 }
+      type: "ma_alignment",
+      params: { timeframe: "daily", selected_lines: ["5", "20", "60"], duration: 3 }
     }]);
     if (filters.length > 0) {
       setOperations([...operations, "AND"]);
@@ -81,15 +81,19 @@ export function ScreenerBuilder() {
   const handleRunQuery = async () => {
     // 1. 유효성 검사
     const invalidFilter = filters.find(f => {
-      if (f.type === "ma_uptrend") {
-        const days = Number(f.params.days);
-        return isNaN(days) || days < 1;
+      if (f.type === "ma_alignment") {
+        const duration = Number(f.params.duration);
+        return isNaN(duration) || duration < 1;
+      }
+      if (f.type === "ma_cross") {
+        const within = Number(f.params.within);
+        return isNaN(within) || within < 1;
       }
       return false;
     });
 
     if (invalidFilter) {
-      alert("연속 상승 기간(Days)은 1 이상의 숫자로 입력해주세요.");
+      alert("유지 기간(duration) 또는 교차 기준일(within)은 1 이상의 숫자로 입력해주세요.");
       return;
     }
 
@@ -98,12 +102,20 @@ export function ScreenerBuilder() {
       const mappedFilters = filters.map(f => {
         let backendParams = { ...f.params };
 
-        if (f.type === "ma_uptrend") {
+        if (f.type === "ma_alignment") {
           const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
           const lines = ((f.params.selected_lines as string[]) || []).map((val: string) => `${prefix}${val}`);
           backendParams = {
             lines,
-            days: Number(f.params.days)
+            duration: Number(f.params.duration)
+          };
+        } else if (f.type === "ma_cross") {
+          const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
+          backendParams = {
+            short_line: `${prefix}${f.params.short_line}`,
+            long_line: `${prefix}${f.params.long_line}`,
+            direction: f.params.direction,
+            within: Number(f.params.within)
           };
         }
 
@@ -139,9 +151,9 @@ export function ScreenerBuilder() {
       }));
 
       setResults(mappedResults);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to fetch screener results:", error);
-      alert(error.message || "실행 중 오류가 발생했습니다.");
+      alert((error as Error).message || "실행 중 오류가 발생했습니다.");
     } finally {
       setIsLoading(false);
     }
