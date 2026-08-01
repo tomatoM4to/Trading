@@ -21,16 +21,19 @@
 {
   "filters": [
     {
-      "type": "ma_uptrend",
+      "type": "ma_alignment",
       "params": {
         "lines": ["ma_daily_20", "ma_daily_60"],
-        "days": 3
+        "duration": 3
       }
     },
     {
-      "type": "convergence",
+      "type": "ma_cross",
       "params": {
-        "margin": 0.05
+        "short_line": "ma_daily_5",
+        "long_line": "ma_daily_20",
+        "within": 1,
+        "direction": "golden"
       }
     }
   ],
@@ -67,7 +70,8 @@
 
 ### 3.2 SQLite Push-down (DB단 연산)
 기술적 지표 계산 로직(이평선 등)은 모두 SQLite 내부로 `Push-down` 시켜 처리합니다.
-- **예시 (이평선 연속 우상향 판별)**: `ma_uptrend` 모듈은 SQLite 윈도우 함수인 `LAG`를 사용하여, DB 안에서 최근 3일간의 이평선 기울기가 양수인지를 쿼리로 계산하고 통과된 Ticker만 꺼내옵니다. 이때 신규 상장주 등의 데이터 부족으로 인한 거짓 매수 신호(False Positive)를 막기 위해 윈도우 함수의 `COUNT`를 강제 검증(`CASE WHEN COUNT() = N`)하여 데이터가 모자라면 `NULL`을 반환, 쿼리 내에서 즉시 탈락(Skip)되도록 설계되었습니다. (참고: `ADR-016`)
+- **예시 (이평선 정배열 판별)**: `ma_alignment` 모듈은 SQLite 윈도우 함수(`COUNT`, `AVG`)를 사용하여 DB 내부에서 20일선 > 60일선 조건이 최근 3일간 유지되었는지를 쿼리로 계산하고 통과된 Ticker만 꺼내옵니다. 이때 신규 상장주 등 데이터 부족으로 인한 거짓 신호(False Positive)를 막기 위해 `CASE WHEN COUNT() = N`으로 데이터 무결성을 강제 검증합니다.
+- **가비지 컬렉터(GC) 방어선**: SQLite 성능 저하 방지와 데이터 보존 주기(일봉 300일, 분봉 7일) 충돌을 막기 위해, 사용자가 입력한 파라미터를 기반으로 최대 탐색 기간(`duration`, `within`)을 동적으로 제한합니다. 초과 시 예외를 발생시켜 DB 락(Lock)을 방지합니다.
 - **일봉/분봉 동시 지원**: 요청 파라미터(`lines`)에 `ma_daily_20`이 들어오면 `daily_ohlcv`를, `ma20`이 들어오면 `minute_ohlcv`를 동적으로 스캔하여 매매 전략(단기/장기)에 모두 대응합니다.
 
 ### 3.3 지연 평가와 API Bulk 호출 (예정 사항)

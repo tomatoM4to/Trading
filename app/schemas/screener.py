@@ -6,10 +6,10 @@ from pydantic import BaseModel, Field, model_validator
 class FilterNode(BaseModel):
     """개별 필터 조건을 정의하는 노드"""
 
-    type: str = Field(description="필터 종류 (예: 'ma_uptrend', 'convergence')")
+    type: str = Field(description="필터 종류 (예: 'ma_alignment', 'ma_cross', 'convergence')")
     params: dict[str, Any] = Field(
         default_factory=dict,
-        description="필터별 파라미터 (예: {'lines': ['ma20'], 'days': 3})",
+        description="필터별 파라미터 (예: {'lines': ['ma_daily_5', 'ma_daily_20'], 'duration': 3})",
     )
 
 
