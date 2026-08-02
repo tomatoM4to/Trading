@@ -167,6 +167,8 @@ class ScreenerEngine:
         order_clause = "date ASC" if is_daily else "date ASC, time ASC"
         order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
 
+        order_desc_clause_m2 = "m2.date DESC" if is_daily else "m2.date DESC, m2.time DESC"
+
         # 2. 파라미터 유효성 검사 (GC 방어)
         max_candles = 200 if is_daily else 1950
         max_window = max(windows.get(ma_line, 0) for ma_line in lines)
@@ -193,12 +195,20 @@ class ScreenerEngine:
         ma_select_str = ",\n                ".join(ma_selects)
 
         query = f"""
-        WITH recent_data AS (
-            SELECT * FROM (
-                SELECT *,
-                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name}
-            ) WHERE rn <= {required_rows}
+        WITH recent_data_raw AS (
+            SELECT m.*
+            FROM stock_codes s
+            CROSS JOIN {table_name} m ON m.ticker = s.ticker
+            WHERE m.rowid IN (
+                SELECT rowid FROM {table_name} m2
+                WHERE m2.ticker = s.ticker
+                ORDER BY {order_desc_clause_m2}
+                LIMIT {required_rows}
+            )
+        ),
+        recent_data AS (
+            SELECT *, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
+            FROM recent_data_raw
         ),
         calc_ma AS (
             SELECT
@@ -251,6 +261,8 @@ class ScreenerEngine:
         order_clause = "date ASC" if is_daily else "date ASC, time ASC"
         order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
 
+        order_desc_clause_m2 = "m2.date DESC" if is_daily else "m2.date DESC, m2.time DESC"
+
         # GC 방어 유효성 검사
         max_candles = 200 if is_daily else 1950
         w_short = windows.get(short_line, 0)
@@ -279,12 +291,20 @@ class ScreenerEngine:
             cross_cond = f"(prev_{short_line} >= prev_{long_line} AND curr_{short_line} < curr_{long_line})"
 
         query = f"""
-        WITH recent_data AS (
-            SELECT * FROM (
-                SELECT *,
-                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name}
-            ) WHERE rn <= {required_rows}
+        WITH recent_data_raw AS (
+            SELECT m.*
+            FROM stock_codes s
+            CROSS JOIN {table_name} m ON m.ticker = s.ticker
+            WHERE m.rowid IN (
+                SELECT rowid FROM {table_name} m2
+                WHERE m2.ticker = s.ticker
+                ORDER BY {order_desc_clause_m2}
+                LIMIT {required_rows}
+            )
+        ),
+        recent_data AS (
+            SELECT *, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
+            FROM recent_data_raw
         ),
         calc_ma AS (
             SELECT
