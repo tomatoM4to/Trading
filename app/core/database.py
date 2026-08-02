@@ -83,6 +83,14 @@ def init_sqlite_connection() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_ticker_date_time ON minute_ohlcv(ticker, date, time)"
         )
+        
+        # 스크리너 엔진의 윈도우 함수 및 정렬 최적화 (OOM, TEMP B-TREE 병목 방지)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_ticker_desc ON daily_ohlcv(ticker, date DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_minute_ohlcv_ticker_desc ON minute_ohlcv(ticker, date DESC, time DESC)"
+        )
 
         conn.commit()
     finally:
