@@ -3,9 +3,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { X, Settings2 } from "lucide-react";
+import { X, Settings2, Loader2, CheckCircle2 } from "lucide-react";
 
-export type FilterType = "ma_uptrend" | "convergence" | "foreign_buy";
+export type FilterType = "ma_alignment" | "ma_cross" | "convergence" | "foreign_buy";
+
+export type FilterStatus = "idle" | "processing" | "done";
 
 export interface FilterNodeState {
   id: string;
@@ -15,17 +17,20 @@ export interface FilterNodeState {
 
 interface FilterBlockProps {
   filter: FilterNodeState;
+  status?: FilterStatus;
   onUpdate: (id: string, newFilter: FilterNodeState) => void;
   onRemove: (id: string) => void;
 }
 
-export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
+export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: FilterBlockProps) {
   const handleTypeChange = (val: FilterType | null) => {
     if (!val) return;
     // 타입 변경 시 파라미터 초기화
     let defaultParams = {};
-    if (val === "ma_uptrend") {
-      defaultParams = { timeframe: "daily", selected_lines: ["5", "20"], days: 3 };
+    if (val === "ma_alignment") {
+      defaultParams = { timeframe: "daily", selected_lines: ["5", "20", "60"], duration: 3 };
+    } else if (val === "ma_cross") {
+      defaultParams = { timeframe: "daily", short_line: "5", long_line: "20", within: 1, direction: "golden" };
     }
     onUpdate(filter.id, { ...filter, type: val, params: defaultParams });
   };
@@ -59,6 +64,10 @@ export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
       <CardHeader className="pb-3 flex flex-row items-center gap-2">
         <Settings2 className="w-5 h-5 text-primary" />
         <CardTitle className="text-lg">필터 조건</CardTitle>
+        <div className="ml-auto mr-8 flex items-center">
+           {status === "processing" && <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />}
+           {status === "done" && <CheckCircle2 className="w-5 h-5 text-green-500" />}
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
         <div className="w-full sm:w-[280px] shrink-0">
@@ -68,7 +77,8 @@ export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
               <SelectValue placeholder="필터 선택" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ma_uptrend">정배열</SelectItem>
+              <SelectItem value="ma_alignment">이평선 정배열</SelectItem>
+              <SelectItem value="ma_cross">이평선 크로스</SelectItem>
               <SelectItem value="convergence">이평선 수렴</SelectItem>
               <SelectItem value="foreign_buy">외국인 순매수</SelectItem>
             </SelectContent>
@@ -76,7 +86,7 @@ export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
         </div>
 
         <div className="flex-1 flex gap-4 flex-wrap items-end">
-          {filter.type === "ma_uptrend" && (
+          {filter.type === "ma_alignment" && (
             <>
               <div className="flex-1 min-w-[120px]">
                 <label className="text-xs font-semibold text-muted-foreground mb-1 block">타임프레임</label>
@@ -117,12 +127,80 @@ export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
               </div>
 
               <div className="flex-1 min-w-[100px]">
-                <label className="text-xs font-semibold text-muted-foreground mb-1 block">기간</label>
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">유지 기간</label>
                 <Input
                   type="number"
                   min={1}
-                  value={(filter.params.days as string | number) ?? ""}
-                  onChange={(e) => handleParamChange("days", e.target.value)}
+                  value={(filter.params.duration as string | number) ?? ""}
+                  onChange={(e) => handleParamChange("duration", e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {filter.type === "ma_cross" && (
+            <>
+              <div className="flex-1 min-w-[120px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">타임프레임</label>
+                <Select
+                  value={String(filter.params.timeframe || "daily")}
+                  onValueChange={(val) => val && handleParamChange("timeframe", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="주기" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">일봉 (Daily)</SelectItem>
+                    <SelectItem value="minute">분봉 (Minute)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">단기 이평선</label>
+                <Select
+                  value={String(filter.params.short_line || "5")}
+                  onValueChange={(val) => val && handleParamChange("short_line", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="단기" /></SelectTrigger>
+                  <SelectContent>
+                    {["5", "10", "20"].map(line => <SelectItem key={line} value={line}>{line}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">장기 이평선</label>
+                <Select
+                  value={String(filter.params.long_line || "20")}
+                  onValueChange={(val) => val && handleParamChange("long_line", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="장기" /></SelectTrigger>
+                  <SelectContent>
+                    {["10", "20", "60", "120"].map(line => <SelectItem key={line} value={line}>{line}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-1 min-w-[120px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">교차 방향</label>
+                <Select
+                  value={String(filter.params.direction || "golden")}
+                  onValueChange={(val) => val && handleParamChange("direction", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="방향" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="golden">골든 크로스</SelectItem>
+                    <SelectItem value="dead">데드 크로스</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">최근 N일/분 이내</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={(filter.params.within as string | number) ?? ""}
+                  onChange={(e) => handleParamChange("within", e.target.value)}
                 />
               </div>
             </>

@@ -4,12 +4,13 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class FilterNode(BaseModel):
-    """개별 필터 조건을 정의하는 노드"""
+    """AST 트리의 단일 필터 노드 (프론트엔드의 블록에 대응)"""
 
-    type: str = Field(description="필터 종류 (예: 'ma_uptrend', 'convergence')")
+    id: str = Field(description="필터 블록의 고유 ID (프론트엔드 UX 연동용)")
+    type: str = Field(description="필터 타입 (예: ma_alignment, volume_surge 등)")
     params: dict[str, Any] = Field(
         default_factory=dict,
-        description="필터별 파라미터 (예: {'lines': ['ma20'], 'days': 3})",
+        description="필터별 세부 파라미터 (예: {'lines': ['ma_daily_5', 'ma_daily_20'], 'duration': 3})",
     )
 
 
@@ -40,6 +41,11 @@ class ScreenerResultItem(BaseModel):
     """스크리너 결과 단일 항목"""
     ticker: str = Field(description="종목 코드")
     name: str = Field(description="종목 이름")
+    market: str | None = Field(default=None, description="시장 (KOSPI/KOSDAQ)")
+    market_cap: float | None = Field(default=None, description="시가총액")
+    close: float | None = Field(default=None, description="현재가")
+    amount: float | None = Field(default=None, description="당일 누적 거래대금")
+    change_rate: float | None = Field(default=None, description="전일 대비 등락률(%)")
 
 class ScreenerResponse(BaseModel):
     """스크리너 결과 응답 스키마"""

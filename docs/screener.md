@@ -21,16 +21,19 @@
 {
   "filters": [
     {
-      "type": "ma_uptrend",
+      "type": "ma_alignment",
       "params": {
         "lines": ["ma_daily_20", "ma_daily_60"],
-        "days": 3
+        "duration": 3
       }
     },
     {
-      "type": "convergence",
+      "type": "ma_cross",
       "params": {
-        "margin": 0.05
+        "short_line": "ma_daily_5",
+        "long_line": "ma_daily_20",
+        "within": 1,
+        "direction": "golden"
       }
     }
   ],
@@ -38,24 +41,63 @@
 }
 ```
 
-### 2.2 Response Schema (응답)
-종목 코드(`ticker`)와 종목명(`name`)을 맵핑하여 리스트 형태로 반환합니다.
+### 2.2 Response Schema (SSE Stream)
 
+기존 JSON 반환 방식에서 HTTP Timeout 방지와 Progressive UX를 위한 **Server-Sent Events (SSE)** 스트리밍(`text/event-stream`)으로 변경되었습니다. 클라이언트는 스트림을 읽으며 다음과 같은 형태의 JSON 이벤트를 순차적으로 수신합니다.
+
+**1. Progress Event (진행 상황)**
+각 필터 연산이 완료될 때마다 실시간 남은 티커 수를 반환합니다.
 ```json
-{
+data: {"type": "progress", "filter_id": "ast-node-1234", "remaining": 1500}
+```
+
+**2. Complete Event (최종 완료)**
+모든 필터 파이프라인 연산이 끝나면 스칼라 서브쿼리로 추출된 종목 리치 데이터(Enrichment)가 포함된 최종 결과를 반환합니다.
+```json
+data: {
+  "type": "complete",
   "items": [
     {
       "ticker": "005930",
-      "name": "삼성전자"
+      "name": "삼성전자",
+      "market": "KOSPI",
+      "market_cap": 4500000000000,
+      "close": 82000,
+      "amount": 15000000000,
+      "change_rate": 2.5
     },
     {
       "ticker": "000660",
-      "name": "SK하이닉스"
+      "name": "SK하이닉스",
+      "market": "KOSPI",
+      "market_cap": 1200000000000,
+      "close": 165000,
+      "amount": 8000000000,
+      "change_rate": -1.2
     }
-  ],
-  "count": 2
+  ]
 }
 ```
+
+### 2.3 Filter Parameter Specification (필터별 파라미터 명세)
+
+현재 시스템에서 지원하는 원자적(Atomic) 필터들의 파라미터 스펙입니다. 클라이언트 UI에서는 이 스펙에 맞춰 `timeframe`(일봉/분봉) 값에 따라 이평선 이름(`ma_daily_5` 또는 `ma5` 등)을 동적으로 조합하여 백엔드로 전송해야 합니다.
+
+#### 1. 이평선 정배열 상태 (`ma_alignment`)
+N개의 이평선을 파라미터로 받아, **지정된 순서대로 크기 비교(A > B > C)** 조건이 일정 기간 내내 유지되었는지 검증합니다.
+- `lines` (`list[str]`): 정렬 상태를 확인할 이평선 이름 배열 (예: `["ma_daily_5", "ma_daily_20", "ma_daily_60"]`). 입력된 배열의 순서대로 부등호 연산을 엮어 `AND` 조건으로 검사합니다.
+- `duration` (`int`): 정배열 상태가 최근 몇 캔들 동안 끊임없이 유지되었는지 검사 (1 이상).
+  - *주의사항*: 시스템의 GC 정책(보관 주기)에 따라 `(최대 보관 캔들 수) - (요청한 가장 긴 이평선 일수) - 1` 보다 큰 `duration`을 요청하면 쿼리 에러가 발생합니다.
+
+#### 2. 이평선 교차 이벤트 (`ma_cross`)
+특정 기간(within) 내에 단기 이평선이 장기 이평선을 상향(골든) 또는 하향(데드) 돌파했는지 검증합니다.
+- `short_line` (`str`): 단기 이평선 이름 (예: `"ma_daily_5"`)
+- `long_line` (`str`): 장기 이평선 이름 (예: `"ma_daily_20"`)
+- `direction` (`str`): 교차 방향 지정.
+  - `"golden"`: 단기선이 장기선을 상향 돌파 (이전 캔들: 단기 <= 장기, 현재 캔들: 단기 > 장기)
+  - `"dead"`: 단기선이 장기선을 하향 돌파 (이전 캔들: 단기 >= 장기, 현재 캔들: 단기 < 장기)
+- `within` (`int`): 최근 N캔들 이내에 해당 교차 이벤트가 적어도 한 번이라도 발생했는지 검사 (1 이상).
+  - 예: `within=1`은 가장 최근 캔들에서 교차가 발생했음을 의미합니다.
 
 ---
 
@@ -67,7 +109,8 @@
 
 ### 3.2 SQLite Push-down (DB단 연산)
 기술적 지표 계산 로직(이평선 등)은 모두 SQLite 내부로 `Push-down` 시켜 처리합니다.
-- **예시 (이평선 연속 우상향 판별)**: `ma_uptrend` 모듈은 SQLite 윈도우 함수인 `LAG`를 사용하여, DB 안에서 최근 3일간의 이평선 기울기가 양수인지를 쿼리로 계산하고 통과된 Ticker만 꺼내옵니다. 이때 신규 상장주 등의 데이터 부족으로 인한 거짓 매수 신호(False Positive)를 막기 위해 윈도우 함수의 `COUNT`를 강제 검증(`CASE WHEN COUNT() = N`)하여 데이터가 모자라면 `NULL`을 반환, 쿼리 내에서 즉시 탈락(Skip)되도록 설계되었습니다. (참고: `ADR-016`)
+- **예시 (이평선 정배열 판별)**: `ma_alignment` 모듈은 SQLite 윈도우 함수(`COUNT`, `AVG`)를 사용하여 DB 내부에서 20일선 > 60일선 조건이 최근 3일간 유지되었는지를 쿼리로 계산하고 통과된 Ticker만 꺼내옵니다. 이때 신규 상장주 등 데이터 부족으로 인한 거짓 신호(False Positive)를 막기 위해 `CASE WHEN COUNT() = N`으로 데이터 무결성을 강제 검증합니다.
+- **가비지 컬렉터(GC) 방어선**: SQLite 성능 저하 방지와 데이터 보존 주기(일봉 300일, 분봉 7일) 충돌을 막기 위해, 사용자가 입력한 파라미터를 기반으로 최대 탐색 기간(`duration`, `within`)을 동적으로 제한합니다. 초과 시 예외를 발생시켜 DB 락(Lock)을 방지합니다.
 - **일봉/분봉 동시 지원**: 요청 파라미터(`lines`)에 `ma_daily_20`이 들어오면 `daily_ohlcv`를, `ma20`이 들어오면 `minute_ohlcv`를 동적으로 스캔하여 매매 전략(단기/장기)에 모두 대응합니다.
 
 ### 3.3 지연 평가와 API Bulk 호출 (예정 사항)

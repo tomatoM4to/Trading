@@ -41,6 +41,7 @@ Trading Server 프로젝트의 프론트엔드는 KIS OpenAPI를 통해 백엔�
 ### 2. Component Organization (`/web/components`)
 - **`chart/ChartContainer.tsx`**: 상태 관리(Timeframe, MA Visibility) 및 `LightweightChart` 컴포넌트 래퍼 역할을 담당합니다. `useMemo`를 통해 Aggregation 및 Line Series 추출 로직을 수행합니다.
 - **`chart/LightweightChart.tsx`**: 순수하게 UI를 렌더링하는 View 컴포넌트로, 데이터가 변경될 때마다 차트를 갱신(Update)하거나 인스턴스를 관리합니다.
+- **`screener/ScreenerBuilder.tsx` & `ScreenerResultTable.tsx`**: 다중 필터 AST 작성 및 SSE 스트림 렌더링. `@microsoft/fetch-event-source`를 통해 백엔드의 진행 상황(Progress Event)을 받아 실시간으로 개별 `FilterBlock`의 상태(Loader/Check)를 업데이트하고 남은 종목 수를 표시하는 점진적(Progressive) UX를 제공합니다. 연산 완료 시 한국어 화폐 단위 변환과 등락률 색상이 입혀진 리치 데이터 테이블을 렌더링합니다.
 
 ## Data Flow
 1. 사용자가 페이지(예: `/chart/005930`) 접속.
