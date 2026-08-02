@@ -48,7 +48,7 @@ class ScreenerEngine:
         return await handler(filter_node.params)
 
     def get_ticker_names(self, tickers: set[str]) -> list:
-        """티커 Set을 받아 이름이 포함된 딕셔너리 리스트로 변환합니다."""
+        """티커 Set을 받아 이름과 각종 지표가 포함된 딕셔너리 리스트로 변환합니다."""
         if not tickers:
             return []
 
@@ -58,12 +58,46 @@ class ScreenerEngine:
         cursor = conn.cursor()
         try:
             placeholders = ",".join("?" for _ in tickers)
-            cursor.execute(
-                f"SELECT ticker, name FROM stock_codes WHERE ticker IN ({placeholders})",
-                tuple(tickers),
-            )
+            query = f"""
+            SELECT 
+                s.ticker, 
+                s.name, 
+                s.market, 
+                s.market_cap,
+                (SELECT close FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as close,
+                (SELECT amount FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as amount,
+                (
+                    SELECT d.close 
+                    FROM daily_ohlcv d 
+                    WHERE d.ticker = s.ticker 
+                      AND d.date < (SELECT m2.date FROM minute_ohlcv m2 WHERE m2.ticker = s.ticker ORDER BY m2.date DESC LIMIT 1)
+                    ORDER BY d.date DESC 
+                    LIMIT 1
+                ) as prev_close
+            FROM stock_codes s
+            WHERE s.ticker IN ({placeholders})
+            """
+            cursor.execute(query, tuple(tickers))
             rows = cursor.fetchall()
-            return [{"ticker": r[0], "name": r[1]} for r in rows]
+            
+            results = []
+            for r in rows:
+                ticker, name, market, market_cap, close, amount, prev_close = r
+                
+                change_rate = None
+                if close is not None and prev_close is not None and prev_close != 0:
+                    change_rate = round((close - prev_close) / prev_close * 100, 2)
+                    
+                results.append({
+                    "ticker": ticker,
+                    "name": name,
+                    "market": market,
+                    "market_cap": market_cap,
+                    "close": close,
+                    "amount": amount,
+                    "change_rate": change_rate
+                })
+            return results
         finally:
             cursor.close()
             conn.close()

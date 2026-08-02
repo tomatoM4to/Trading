@@ -1,30 +1,36 @@
-# Implementation Plan: Atomic MA Screener Filters
+# Implementation Plan: Screener Result Enrichment
 
 ## Overview
-기존의 무거운 다중 이평선 우상향 필터(`ma_uptrend`)를 제거하고, '상태(ma_alignment)'와 '이벤트(ma_cross)' 단위로 쪼개진 2개의 초경량 원자적 필터를 스크리너 엔진(`screener_service.py`)에 구현합니다. 더불어 GC 주기에 기반한 동적 duration 방어 로직을 추가하여 1GB RAM 환경을 철저히 보호합니다.
+스크리너 연산 결과(티커 리스트)에 직관적인 판단을 돕는 리치 데이터(시장, 시가총액, 현재가, 거래대금, 전일대비 등락률)를 추가하여 UI에 표시합니다. 프론트엔드와 백엔드가 나누어진 구조이므로, API 응답 스키마 변경부터 프론트엔드 UI 렌더링까지 엔드투엔드(End-to-End) 수직 분할(Vertical Slicing) 방식으로 계획을 수립합니다.
 
 ## Architecture Decisions
-- **Filter 분리**: `ma_alignment`(정배열 상태 유지), `ma_cross`(단/장기 교차) 2개의 독립적인 필터로 구현하여 SQL 쿼리를 극도로 단순화합니다.
-- **Set-Theory 파이프라인 연동**: 기존 `screener_service.py`의 `ScreenerEngine.run_pipeline`은 수정하지 않고, 새로운 핸들러(`_handle_ma_alignment`, `_handle_ma_cross`)만 추가하여 기존 파이프라인 구조에 100% 완벽히 호환되게 합니다.
-- **Dynamic Duration Limits**: 일봉(200 영업일), 분봉(1950 캔들) GC 제한에 맞춰 요청된 파라미터의 최대 이평선 길이를 역산하여, 최대 허용 `duration` 한계값을 강제합니다. 초과 시 즉각적으로 예외(Error)를 발생시킵니다.
+- **Zero-Latency 유지**: 쿼리 최적화를 위해 복잡한 연산 없이 `stock_codes` (PK), `minute_ohlcv` (PK 인덱스 역순), `daily_ohlcv` (PK 인덱스 역순) 테이블을 티커 기준으로 단순 조회(또는 서브쿼리 조인)하여 연산 부하를 최소화합니다.
+- **백엔드에서 등락률 연산**: 프론트엔드의 부담을 줄이고 스키마의 직관성을 높이기 위해, 백엔드에서 `(현재가 - 전일종가) / 전일종가 * 100`을 계산하여 `change_rate` 필드로 반환합니다.
+- **UI 시각화 최적화**: 거래대금과 시가총액은 큰 숫자이므로 프론트엔드에서 한국어 단위(예: "5,200억")로 포맷팅하여 가독성을 높이고, 등락률은 양수(빨간색)/음수(파란색)로 색상을 적용합니다.
 
 ## Task List
 
-### Phase 1: Atomic Filters Implementation
-- [ ] Task 1: `ma_alignment` 필터 구현 (상태 필터)
-- [ ] Task 2: `ma_cross` 필터 구현 (이벤트 필터)
+### Phase 1: Backend API Enrichment
+- [ ] Task 1: API 스키마 및 서비스 로직 업데이트
 
-### Checkpoint: Foundation
-- [ ] 더미 필터 파라미터를 활용해 SQLite SQL 문법에 오류가 없는지 `screener_service.py` 내부 동작 검증
+### Checkpoint: Backend Complete
+- [ ] 스웨거(Swagger) 또는 직접 API 호출 시 `change_rate`, `amount` 등 신규 필드가 정상적으로 반환되는가?
+- [ ] 쿼리 속도 저하(수 초 이상의 딜레이)가 없는가?
 
-### Phase 2: Cleanup and Refactoring
-- [ ] Task 3: 레거시 `ma_uptrend` 필터 제거 및 엔진 핸들러 매핑 업데이트
+### Phase 2: Frontend UI Implementation
+- [ ] Task 2: 프론트엔드 인터페이스 및 테이블 컴포넌트 업데이트
 
 ### Checkpoint: Complete
-- [ ] 전체 스크리너 파이프라인 오류 없이 정상 작동 확인
+- [ ] 스크리너 실행 후 테이블에 신규 컬럼들이 정상적으로 표시되는가?
+- [ ] 데이터 포맷(억 단위, 등락률 색상)이 기획대로 렌더링되는가?
+- [ ] Ready for review
 
 ## Risks and Mitigations
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| 윈도우 함수 성능 저하 | Med | 복잡도를 낮춘 단순한 논리 연산식과 `ROWS BETWEEN` 조합으로 빠른 인덱스 스캔 유도. |
-| 프론트엔드 연동 변경점 | Low | 기존 필터 파라미터 구조가 완전히 바뀌므로 스펙(`docs/screener.md`)을 갱신하여 인지시킴. |
+| DB 락 또는 지연 | High | 서브쿼리에 반드시 인덱스를 타도록 `ORDER BY date DESC LIMIT 1` 구조 유지 |
+| 장 시작 전 데이터 부족 | Med | `minute_ohlcv`에 오늘 데이터가 없을 경우 에러가 나지 않도록 `LEFT JOIN` 또는 `IS NULL` 처리 보완 |
+| UI 가로 스크롤/공간 부족 | Low | 컬럼 너비를 유동적으로 조절하고 Tailwind `truncate` 적용 |
+
+## Open Questions
+- 등락률(`change_rate`)을 소수점 둘째 자리에서 반올림하여 넘겨주는 것이 좋겠죠? (백엔드에서 `round()` 처리)

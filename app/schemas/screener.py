@@ -40,6 +40,11 @@ class ScreenerResultItem(BaseModel):
     """스크리너 결과 단일 항목"""
     ticker: str = Field(description="종목 코드")
     name: str = Field(description="종목 이름")
+    market: str | None = Field(default=None, description="시장 (KOSPI/KOSDAQ)")
+    market_cap: float | None = Field(default=None, description="시가총액")
+    close: float | None = Field(default=None, description="현재가")
+    amount: float | None = Field(default=None, description="당일 누적 거래대금")
+    change_rate: float | None = Field(default=None, description="전일 대비 등락률(%)")
 
 class ScreenerResponse(BaseModel):
     """스크리너 결과 응답 스키마"""

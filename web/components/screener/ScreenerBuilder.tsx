@@ -148,10 +148,15 @@ export function ScreenerBuilder() {
 
       const data = await response.json();
 
-      // 서버에서 전달받은 ticker와 name 기반으로 매핑
-      const mappedResults = (data.items || []).map((item: { ticker: string; name: string }) => ({
+      // 서버에서 전달받은 데이터 매핑 (리치 데이터 포함)
+      const mappedResults = (data.items || []).map((item: any) => ({
         ticker: item.ticker,
-        name: item.name
+        name: item.name,
+        market: item.market,
+        market_cap: item.market_cap,
+        close: item.close,
+        amount: item.amount,
+        change_rate: item.change_rate
       }));
 
       setResults(mappedResults);

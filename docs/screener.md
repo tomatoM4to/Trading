@@ -49,11 +49,21 @@
   "items": [
     {
       "ticker": "005930",
-      "name": "삼성전자"
+      "name": "삼성전자",
+      "market": "KOSPI",
+      "market_cap": 4500000000000,
+      "close": 82000,
+      "amount": 15000000000,
+      "change_rate": 2.5
     },
     {
       "ticker": "000660",
-      "name": "SK하이닉스"
+      "name": "SK하이닉스",
+      "market": "KOSPI",
+      "market_cap": 1200000000000,
+      "close": 165000,
+      "amount": 8000000000,
+      "change_rate": -1.2
     }
   ],
   "count": 2
