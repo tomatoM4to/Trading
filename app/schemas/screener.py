@@ -4,12 +4,13 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class FilterNode(BaseModel):
-    """개별 필터 조건을 정의하는 노드"""
+    """AST 트리의 단일 필터 노드 (프론트엔드의 블록에 대응)"""
 
-    type: str = Field(description="필터 종류 (예: 'ma_alignment', 'ma_cross', 'convergence')")
+    id: str = Field(description="필터 블록의 고유 ID (프론트엔드 UX 연동용)")
+    type: str = Field(description="필터 타입 (예: ma_alignment, volume_surge 등)")
     params: dict[str, Any] = Field(
         default_factory=dict,
-        description="필터별 파라미터 (예: {'lines': ['ma_daily_5', 'ma_daily_20'], 'duration': 3})",
+        description="필터별 세부 파라미터 (예: {'lines': ['ma_daily_5', 'ma_daily_20'], 'duration': 3})",
     )
 
 

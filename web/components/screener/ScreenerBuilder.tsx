@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { FilterBlock, FilterNodeState } from "./FilterBlock";
+import { FilterBlock, FilterNodeState, FilterStatus } from "./FilterBlock";
 import { LogicOp, LogicOperator } from "./LogicOperator";
 import { ScreenerResultTable, ScreenerResult } from "./ScreenerResultTable";
 import { ChartModal } from "./ChartModal";
+import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { Button } from "@/components/ui/button";
 import { Play, Plus } from "lucide-react";
 
@@ -16,6 +17,7 @@ const generateId = () =>
 
 interface ScreenerRequestPayload {
   filters: Array<{
+    id: string;
     type: string;
     params: Record<string, string | number | boolean | string[]>;
   }>;
@@ -34,6 +36,8 @@ export function ScreenerBuilder() {
 
   const [results, setResults] = useState<ScreenerResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [filterStatuses, setFilterStatuses] = useState<Record<string, FilterStatus>>({});
+  const [remainingCount, setRemainingCount] = useState<number | null>(null);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
 
@@ -120,6 +124,7 @@ export function ScreenerBuilder() {
         }
 
         return {
+          id: f.id,
           type: f.type,
           params: backendParams
         };
@@ -132,38 +137,59 @@ export function ScreenerBuilder() {
 
       console.log("Run Screener with payload:", payload);
       setIsLoading(true);
-      const response = await fetch("http://localhost:8000/api/screener/run", {
+      
+      const initialStatuses: Record<string, FilterStatus> = {};
+      filters.forEach(f => initialStatuses[f.id] = "idle");
+      if (filters.length > 0) initialStatuses[filters[0].id] = "processing";
+      setFilterStatuses(initialStatuses);
+      setRemainingCount(null);
+      setResults([]);
+
+      const ctrl = new AbortController();
+
+      await fetchEventSource("http://localhost:8000/api/screener/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+        async onmessage(ev) {
+          const data = JSON.parse(ev.data);
+          if (data.type === "progress") {
+            setFilterStatuses(prev => {
+              const next = { ...prev };
+              next[data.filter_id] = "done";
+              
+              const index = filters.findIndex(f => f.id === data.filter_id);
+              if (index >= 0 && index < filters.length - 1) {
+                 next[filters[index + 1].id] = "processing";
+              }
+              return next;
+            });
+            setRemainingCount(data.remaining);
+          } else if (data.type === "complete") {
+            const mappedResults = (data.items || []).map((item: any) => ({
+              ticker: item.ticker,
+              name: item.name,
+              market: item.market,
+              market_cap: item.market_cap,
+              close: item.close,
+              amount: item.amount,
+              change_rate: item.change_rate
+            }));
+            setResults(mappedResults);
+            setIsLoading(false);
+            ctrl.abort(); // Prevent auto-reconnect
+          }
+        },
+        onerror(err) {
+          setIsLoading(false);
+          throw err;
+        }
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        if (errorData && errorData.detail) {
-          throw new Error(errorData.detail);
-        }
-        throw new Error(`API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      // 서버에서 전달받은 데이터 매핑 (리치 데이터 포함)
-      const mappedResults = (data.items || []).map((item: any) => ({
-        ticker: item.ticker,
-        name: item.name,
-        market: item.market,
-        market_cap: item.market_cap,
-        close: item.close,
-        amount: item.amount,
-        change_rate: item.change_rate
-      }));
-
-      setResults(mappedResults);
     } catch (error: unknown) {
       console.error("Failed to fetch screener results:", error);
       alert((error as Error).message || "실행 중 오류가 발생했습니다.");
-    } finally {
       setIsLoading(false);
     }
   };
@@ -192,6 +218,7 @@ export function ScreenerBuilder() {
                 )}
                 <FilterBlock
                   filter={filter}
+                  status={filterStatuses[filter.id] || "idle"}
                   onUpdate={updateFilter}
                   onRemove={removeFilter}
                 />
@@ -206,7 +233,12 @@ export function ScreenerBuilder() {
           </div>
         </div>
 
-        <div className="flex justify-end pt-2">
+        <div className="flex justify-end pt-2 items-center gap-4">
+          {remainingCount !== null && (
+            <div className="text-sm font-semibold text-primary/80 animate-in fade-in slide-in-from-right-4">
+              실시간 남은 종목: <span className="text-2xl text-primary font-bold">{remainingCount.toLocaleString()}</span> 개
+            </div>
+          )}
           <Button
             size="lg"
             className="w-full sm:w-auto font-bold tracking-wide shadow-md"

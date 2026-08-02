@@ -1,23 +1,22 @@
 from fastapi import APIRouter, HTTPException
-from schemas.screener import ScreenerRequest, ScreenerResponse
+from fastapi.responses import StreamingResponse
+from schemas.screener import ScreenerRequest
 from services.screener_service import screener_engine
 
 router = APIRouter(prefix="/api/screener", tags=["Screener"])
 
 
-@router.post("/run", response_model=ScreenerResponse)
+@router.post("/run")
 async def run_screener(request: ScreenerRequest):
     """
-    클라이언트가 정의한 필터 목록과 연산자(AND/OR)를 바탕으로 다이내믹 스크리닝을 수행합니다.
+    프론트엔드에서 전달받은 조건(AST)을 기반으로 백엔드 파이프라인을 실행합니다 (SSE Stream).
     """
     try:
-        result_set = await screener_engine.run_pipeline(request)
-    except ValueError as e:
+        return StreamingResponse(
+            screener_engine.run_pipeline_stream(request),
+            media_type="text/event-stream"
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(e))
-
-    # Set을 이름이 포함된 리스트로 변환
-    items = screener_engine.get_ticker_names(result_set)
-    return ScreenerResponse(
-        items=items,
-        count=len(items)
-    )

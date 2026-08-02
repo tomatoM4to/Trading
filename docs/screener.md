@@ -41,11 +41,21 @@
 }
 ```
 
-### 2.2 Response Schema (응답)
-종목 코드(`ticker`)와 종목명(`name`)을 맵핑하여 리스트 형태로 반환합니다.
+### 2.2 Response Schema (SSE Stream)
 
+기존 JSON 반환 방식에서 HTTP Timeout 방지와 Progressive UX를 위한 **Server-Sent Events (SSE)** 스트리밍(`text/event-stream`)으로 변경되었습니다. 클라이언트는 스트림을 읽으며 다음과 같은 형태의 JSON 이벤트를 순차적으로 수신합니다.
+
+**1. Progress Event (진행 상황)**
+각 필터 연산이 완료될 때마다 실시간 남은 티커 수를 반환합니다.
 ```json
-{
+data: {"type": "progress", "filter_id": "ast-node-1234", "remaining": 1500}
+```
+
+**2. Complete Event (최종 완료)**
+모든 필터 파이프라인 연산이 끝나면 스칼라 서브쿼리로 추출된 종목 리치 데이터(Enrichment)가 포함된 최종 결과를 반환합니다.
+```json
+data: {
+  "type": "complete",
   "items": [
     {
       "ticker": "005930",
@@ -65,8 +75,7 @@
       "amount": 8000000000,
       "change_rate": -1.2
     }
-  ],
-  "count": 2
+  ]
 }
 ```
 

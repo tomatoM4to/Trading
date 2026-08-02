@@ -40,6 +40,42 @@ class ScreenerEngine:
 
         return current_set
 
+    async def run_pipeline_stream(self, request: ScreenerRequest):
+        """
+        주어진 AST(플랫 리스트) 파이프라인을 순회하며 Set 연산을 수행하고 SSE 이벤트를 스트리밍합니다.
+        """
+        import json
+        if not request.filters:
+            yield f"data: {json.dumps({'type': 'complete', 'items': []})}\n\n"
+            return
+
+        # 1. 첫 번째 필터 실행
+        first_filter = request.filters[0]
+        current_set = await self._execute_filter(first_filter)
+        
+        # 첫 번째 필터 종료 이벤트 yield
+        yield f"data: {json.dumps({'type': 'progress', 'filter_id': first_filter.id, 'remaining': len(current_set)})}\n\n"
+
+        # 2. 두 번째 필터부터 순차 연산
+        for i in range(1, len(request.filters)):
+            next_filter = request.filters[i]
+            operation = request.operations[i - 1]
+
+            next_set = await self._execute_filter(next_filter)
+
+            if operation == "AND":
+                current_set = current_set & next_set
+            elif operation == "OR":
+                current_set = current_set | next_set
+
+            yield f"data: {json.dumps({'type': 'progress', 'filter_id': next_filter.id, 'remaining': len(current_set)})}\n\n"
+
+        # 3. 최종 결과 확장(Enrichment)
+        items = self.get_ticker_names(current_set)
+        
+        # 최종 완료 이벤트 yield
+        yield f"data: {json.dumps({'type': 'complete', 'items': items})}\n\n"
+
     async def _execute_filter(self, filter_node: FilterNode) -> set[str]:
         """단일 필터 모듈을 호출하여 티커 집합(Set)을 반환합니다."""
         handler = self.filter_handlers.get(filter_node.type)

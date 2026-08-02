@@ -1,44 +1,68 @@
-## Task 1: Backend Schema & Service Update
+## Task 1: Backend SSE Streaming Logic Update
 
-**Description:** `ScreenerResultItem` 스키마를 확장하고, `screener_service.py`의 `get_ticker_names` 함수에서 `stock_codes`, `minute_ohlcv`, `daily_ohlcv`를 조인하여 확장된 데이터를 반환하도록 수정합니다.
+**Description:** `FilterNode` 스키마에 `id` 필드를 추가하고, `screener_service.py`에 SSE용 비동기 제너레이터 `run_pipeline_stream`을 추가합니다. 라우터는 이 제너레이터를 `StreamingResponse`로 감싸 반환합니다.
 
 **Acceptance criteria:**
-- [ ] `app/schemas/screener.py`의 `ScreenerResultItem`에 `market`, `market_cap`, `close`, `amount`, `change_rate` 필드가 추가됨.
-- [ ] `app/services/screener_service.py`의 `get_ticker_names` 함수가 3개 테이블에서 필요한 데이터를 가져와 객체에 매핑함.
-- [ ] `change_rate` (등락률)가 파이썬 로직 또는 쿼리에서 `(현재가 - 전일종가) / 전일종가 * 100`으로 계산됨.
+- [ ] `app/schemas/screener.py`의 `FilterNode` 클래스에 `id: str` 필드가 추가됨.
+- [ ] `ScreenerEngine.run_pipeline_stream`이 작성되어, 필터마다 `{"type": "progress", "filter_id": "...", "remaining": N}`을 `yield`함.
+- [ ] 연산 종료 시 `{"type": "complete", "items": [...]}`을 `yield`함.
+- [ ] `app/routes/screener.py`의 엔드포인트가 `StreamingResponse(media_type="text/event-stream")`를 반환하도록 수정됨 (또는 기존 함수 교체).
 
 **Verification:**
-- [ ] 백엔드 서버가 에러 없이 구동됨 (uvicorn)
-- [ ] 스웨거 테스트 또는 curl 호출 시 반환 JSON에 신규 필드가 포함됨
+- [ ] `uv run fastapi dev app/main.py` 구동 후 오류 없음.
 
 **Dependencies:** None
 
 **Files likely touched:**
 - `app/schemas/screener.py`
 - `app/services/screener_service.py`
+- `app/routes/screener.py`
 
-**Estimated scope:** Small: 1-2 files
+**Estimated scope:** Medium: 3 files
 
 ---
 
-## Task 2: Frontend Types & Components Update
+## Task 2: Frontend POST Payload & Event-Source Integration
 
-**Description:** 프론트엔드의 `ScreenerResult` 타입을 백엔드 스키마 변경에 맞게 업데이트하고, `ScreenerResultTable` 컴포넌트에 새로운 컬럼을 추가하며, 거래대금과 시가총액을 억 단위로 포맷팅합니다.
+**Description:** 클라이언트가 백엔드로 `id`를 포함한 필터 페이로드를 보내고, 스트리밍 응답을 받아 파싱하는 통신 코드를 작성합니다.
 
 **Acceptance criteria:**
-- [ ] `web/components/screener/ScreenerResultTable.tsx`의 `ScreenerResult` 인터페이스에 신규 필드가 추가됨.
-- [ ] 테이블 헤더와 셀에 '시장', '현재가', '등락률', '당일 거래대금', '시가총액' 컬럼이 추가됨.
-- [ ] 시가총액과 거래대금이 한국어 단위(예: "4500000000000" -> "4.5조", "15000000000" -> "150억")로 포맷팅됨.
-- [ ] 등락률이 양수면 빨간색, 음수면 파란색 텍스트로 렌더링됨.
+- [ ] 패키지 의존성 추가: `npm i @microsoft/fetch-event-source` (또는 `pnpm`/`yarn` 등 해당 프로젝트 패키지 매니저에 맞게) 설치.
+- [ ] `ScreenerBuilder.tsx`에서 POST 페이로드에 각 필터의 `id`를 포함함.
+- [ ] 기존 `fetch()` 기반 백엔드 통신 코드를 `fetchEventSource()`로 교체함.
+- [ ] `onmessage` 콜백을 통해 `progress` 및 `complete` 이벤트를 콘솔에 출력함.
 
 **Verification:**
-- [ ] 프론트엔드 서버가 빌드되고 화면 렌더링에 에러가 없음.
-- [ ] 브라우저에서 스크리너 탭 진입 후 검색 시 UI가 깨지지 않고 데이터가 올바르게 렌더링됨.
+- [ ] 브라우저 네트워크 탭에서 EventStream 탭이 열리고 청크 단위로 데이터가 수신되는지 확인.
 
 **Dependencies:** Task 1
 
 **Files likely touched:**
-- `web/components/screener/ScreenerResultTable.tsx`
-- 필요 시 포맷팅 유틸리티 함수 파일 추가/수정
+- `web/package.json`
+- `web/components/screener/ScreenerBuilder.tsx`
 
-**Estimated scope:** Small: 1-2 files
+**Estimated scope:** Small: 2 files
+
+---
+
+## Task 3: Frontend UX/UI (Spinners and Counters)
+
+**Description:** 스트리밍으로 전달되는 이벤트 데이터를 React 상태로 관리하고, 개별 필터 완료 표시 및 남은 티커 수(카운터)를 화면에 렌더링합니다.
+
+**Acceptance criteria:**
+- [ ] `ScreenerBuilder.tsx`에 `filterStatuses: Record<string, "pending" | "processing" | "done">` 상태가 추가됨.
+- [ ] progress 이벤트를 받을 때마다 해당 `filter_id` 상태를 갱신하고 남은 티커 수를 UI에 표시함.
+- [ ] 필터 블록 우측 또는 상단에 `Loader2`(lucide-react 스피너) 또는 `CheckCircle2` 아이콘을 그려 시각적 피드백 제공.
+- [ ] `complete` 이벤트를 받으면 결과를 기존 테이블 컴포넌트에 넘기고 로딩 종료.
+
+**Verification:**
+- [ ] 스크리너 실행 시 필터들이 순차적으로 로딩 돌다가 완료 표기가 찍히는지 육안 확인.
+- [ ] 최종 결과가 이전 버전과 동일하게 테이블에 출력되는지 확인.
+
+**Dependencies:** Task 2
+
+**Files likely touched:**
+- `web/components/screener/ScreenerBuilder.tsx`
+- (선택) `web/components/screener/FilterBlock.tsx`
+
+**Estimated scope:** Medium: 2 files

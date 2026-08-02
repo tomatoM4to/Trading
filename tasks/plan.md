@@ -1,36 +1,36 @@
-# Implementation Plan: Screener Result Enrichment
+# Implementation Plan: Screener Real-time Progress UX (via SSE)
 
 ## Overview
-스크리너 연산 결과(티커 리스트)에 직관적인 판단을 돕는 리치 데이터(시장, 시가총액, 현재가, 거래대금, 전일대비 등락률)를 추가하여 UI에 표시합니다. 프론트엔드와 백엔드가 나누어진 구조이므로, API 응답 스키마 변경부터 프론트엔드 UI 렌더링까지 엔드투엔드(End-to-End) 수직 분할(Vertical Slicing) 방식으로 계획을 수립합니다.
+다중 필터 스크리너 연산 시 길어지는 대기 시간으로 인한 HTTP 타임아웃을 막고, 유저에게 현재 실행 중인 필터와 실시간으로 좁혀지는 종목 수를 시각적으로 피드백(Progressive Rendering)하기 위해 SSE(Server-Sent Events) 아키텍처를 도입합니다.
 
 ## Architecture Decisions
-- **Zero-Latency 유지**: 쿼리 최적화를 위해 복잡한 연산 없이 `stock_codes` (PK), `minute_ohlcv` (PK 인덱스 역순), `daily_ohlcv` (PK 인덱스 역순) 테이블을 티커 기준으로 단순 조회(또는 서브쿼리 조인)하여 연산 부하를 최소화합니다.
-- **백엔드에서 등락률 연산**: 프론트엔드의 부담을 줄이고 스키마의 직관성을 높이기 위해, 백엔드에서 `(현재가 - 전일종가) / 전일종가 * 100`을 계산하여 `change_rate` 필드로 반환합니다.
-- **UI 시각화 최적화**: 거래대금과 시가총액은 큰 숫자이므로 프론트엔드에서 한국어 단위(예: "5,200억")로 포맷팅하여 가독성을 높이고, 등락률은 양수(빨간색)/음수(파란색)로 색상을 적용합니다.
+- **SSE with POST Payload**: 복잡한 필터 AST 페이로드를 전달해야 하므로 GET 방식의 브라우저 기본 `EventSource` 대신, `fetch` 기반의 스트림 리더 혹은 `@microsoft/fetch-event-source`를 사용하여 POST 방식으로 SSE를 수신합니다.
+- **FastAPI StreamingResponse**: 별도의 비동기 큐(Celery/Redis) 없이 FastAPI 내장 `StreamingResponse`를 사용하여, 각 필터 연산이 완료될 때마다 즉시 `data: {...}\n\n` 형태의 이벤트를 푸시합니다.
+- **Set Length for O(1) Progress**: 종목 교집합(`set`)의 크기(`len()`)를 구하는 비용은 O(1)이므로, 필터 연산 중간중간 남은 종목 수를 전달하여 서버 부하 없이 완벽한 점진적 피드백 UX를 완성합니다.
 
 ## Task List
 
-### Phase 1: Backend API Enrichment
-- [ ] Task 1: API 스키마 및 서비스 로직 업데이트
+### Phase 1: Backend SSE Streaming Foundation
+- [ ] Task 1: 백엔드 스키마 및 SSE 스트리밍 로직 구현
 
 ### Checkpoint: Backend Complete
-- [ ] 스웨거(Swagger) 또는 직접 API 호출 시 `change_rate`, `amount` 등 신규 필드가 정상적으로 반환되는가?
-- [ ] 쿼리 속도 저하(수 초 이상의 딜레이)가 없는가?
+- [ ] curl 통신 테스트 시 `data: {"type": "progress", ...}` 청크(Chunk)가 순차적으로 밀려 들어오는가?
+- [ ] 마지막에 `data: {"type": "complete", "items": [...]}`가 정상 반환되는가?
 
-### Phase 2: Frontend UI Implementation
-- [ ] Task 2: 프론트엔드 인터페이스 및 테이블 컴포넌트 업데이트
+### Phase 2: Frontend SSE Consumer & UX
+- [ ] Task 2: 프론트엔드 POST SSE 스트림 수신 로직 구현 (fetch-event-source 적용)
+- [ ] Task 3: 프론트엔드 개별 필터 스피너/체크마크 UX 및 남은 종목 수 렌더링
 
 ### Checkpoint: Complete
-- [ ] 스크리너 실행 후 테이블에 신규 컬럼들이 정상적으로 표시되는가?
-- [ ] 데이터 포맷(억 단위, 등락률 색상)이 기획대로 렌더링되는가?
+- [ ] 스크리너 "실행" 버튼 클릭 시, 화면 상의 개별 필터 블록에 순차적으로 로딩(Spinner)과 완료(Check) 표시가 렌더링되는가?
+- [ ] 중간 종목 수가 표시되고, 최종 테이블이 정상적으로 렌더링되는가?
 - [ ] Ready for review
 
 ## Risks and Mitigations
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| DB 락 또는 지연 | High | 서브쿼리에 반드시 인덱스를 타도록 `ORDER BY date DESC LIMIT 1` 구조 유지 |
-| 장 시작 전 데이터 부족 | Med | `minute_ohlcv`에 오늘 데이터가 없을 경우 에러가 나지 않도록 `LEFT JOIN` 또는 `IS NULL` 처리 보완 |
-| UI 가로 스크롤/공간 부족 | Low | 컬럼 너비를 유동적으로 조절하고 Tailwind `truncate` 적용 |
+| 프론트엔드 상태 업데이트 빈도 문제 | Med | 리렌더링 최적화를 위해 React 상태를 너무 잘게 쪼개지 않고, filterStatus 맵 하나로 통합 관리 |
+| KIS API Rate Limit 또는 DB 락 | Low | 이미 파이프라인(Set 연산)과 스칼라 서브쿼리가 고도로 최적화되어 있으므로, 단순히 렌더링 과정(스트리밍)만 쪼개는 것은 백엔드 부하를 전혀 가중시키지 않음 |
 
 ## Open Questions
-- 등락률(`change_rate`)을 소수점 둘째 자리에서 반올림하여 넘겨주는 것이 좋겠죠? (백엔드에서 `round()` 처리)
+- 개별 필터의 완료 상태를 `FilterBlock` 안쪽에 아이콘으로 그릴지, 아니면 우측에 배지 형태로 그릴지 미세 조정 필요.

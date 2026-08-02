@@ -3,9 +3,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { X, Settings2 } from "lucide-react";
+import { X, Settings2, Loader2, CheckCircle2 } from "lucide-react";
 
 export type FilterType = "ma_alignment" | "ma_cross" | "convergence" | "foreign_buy";
+
+export type FilterStatus = "idle" | "processing" | "done";
 
 export interface FilterNodeState {
   id: string;
@@ -15,11 +17,12 @@ export interface FilterNodeState {
 
 interface FilterBlockProps {
   filter: FilterNodeState;
+  status?: FilterStatus;
   onUpdate: (id: string, newFilter: FilterNodeState) => void;
   onRemove: (id: string) => void;
 }
 
-export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
+export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: FilterBlockProps) {
   const handleTypeChange = (val: FilterType | null) => {
     if (!val) return;
     // 타입 변경 시 파라미터 초기화
@@ -61,6 +64,10 @@ export function FilterBlock({ filter, onUpdate, onRemove }: FilterBlockProps) {
       <CardHeader className="pb-3 flex flex-row items-center gap-2">
         <Settings2 className="w-5 h-5 text-primary" />
         <CardTitle className="text-lg">필터 조건</CardTitle>
+        <div className="ml-auto mr-8 flex items-center">
+           {status === "processing" && <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />}
+           {status === "done" && <CheckCircle2 className="w-5 h-5 text-green-500" />}
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
         <div className="w-full sm:w-[280px] shrink-0">
