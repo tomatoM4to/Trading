@@ -98,11 +98,11 @@ export function ScreenerBuilder() {
   const handleRunQuery = async () => {
     // 1. 유효성 검사
     const invalidFilter = filters.find(f => {
-      if (f.type === "ma_alignment") {
+      if (f.type === "ma_alignment" || f.type === "ma_convergence_consolidation") {
         const duration = Number(f.params.duration);
         return isNaN(duration) || duration < 1;
       }
-      if (f.type === "ma_cross") {
+      if (f.type === "ma_cross" || f.type === "ma_convergence_point") {
         const within = Number(f.params.within);
         return isNaN(within) || within < 1;
       }
@@ -132,6 +132,22 @@ export function ScreenerBuilder() {
             short_line: `${prefix}${f.params.short_line}`,
             long_line: `${prefix}${f.params.long_line}`,
             direction: f.params.direction,
+            within: Number(f.params.within)
+          };
+        } else if (f.type === "ma_convergence_consolidation") {
+          const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
+          const lines = ((f.params.selected_lines as string[]) || []).map((val: string) => `${prefix}${val}`);
+          backendParams = {
+            lines,
+            threshold: Number(f.params.threshold),
+            duration: Number(f.params.duration)
+          };
+        } else if (f.type === "ma_convergence_point") {
+          const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
+          const lines = ((f.params.selected_lines as string[]) || []).map((val: string) => `${prefix}${val}`);
+          backendParams = {
+            lines,
+            threshold: Number(f.params.threshold),
             within: Number(f.params.within)
           };
         } else if (f.type === "foreign_net_buy_rank" || f.type === "inst_net_buy_rank") {

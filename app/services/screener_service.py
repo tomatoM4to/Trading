@@ -9,7 +9,8 @@ class ScreenerEngine:
         self.filter_handlers = {
             "ma_alignment": self._handle_ma_alignment,
             "ma_cross": self._handle_ma_cross,
-            "convergence": self._handle_convergence,
+            "ma_convergence_consolidation": self._handle_ma_convergence_consolidation,
+            "ma_convergence_point": self._handle_ma_convergence_point,
             "foreign_net_buy_rank": self._handle_foreign_net_buy_rank,
             "inst_net_buy_rank": self._handle_inst_net_buy_rank,
         }
@@ -325,9 +326,171 @@ class ScreenerEngine:
             cursor.close()
             conn.close()
 
-    async def _handle_convergence(self, params: dict[str, Any]) -> set[str]:
-        """이평선 수렴 판별 필터 (SQLite)"""
-        return set()
+    async def _handle_ma_convergence_consolidation(self, params: dict[str, Any]) -> set[str]:
+        """수렴 횡보(상태 유지) 판별 필터"""
+        lines = params.get("lines", [])
+        threshold = params.get("threshold", 2.0)
+        duration = params.get("duration", 1)
+
+        if not lines or len(lines) < 2:
+            return set()
+
+        windows = {
+            "ma_daily_5": 4, "ma_daily_20": 19, "ma_daily_60": 59, "ma_daily_120": 119,
+            "ma5": 4, "ma10": 9, "ma20": 19, "ma60": 59, "ma120": 119,
+        }
+
+        is_daily = any("daily" in ma_line for ma_line in lines)
+        table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
+        order_clause = "date ASC" if is_daily else "date ASC, time ASC"
+        order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
+
+        max_candles = 200 if is_daily else 1950
+        max_window = max(windows.get(ma_line, 0) for ma_line in lines)
+        if duration > max_candles - max_window - 1:
+            raise ValueError(f"지정된 duration({duration})이 GC 보관 주기를 초과합니다.")
+
+        required_rows = max_window + duration + 1
+
+        ma_selects = []
+        for ma_line in lines:
+            w = windows.get(ma_line, 0)
+            ma_selects.append(
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"ELSE NULL END as {ma_line}"
+            )
+        
+        ma_select_str = ",\n                ".join(ma_selects)
+        
+        max_func = f"MAX({', '.join(lines)})"
+        min_func = f"MIN({', '.join(lines)})"
+        
+        convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
+        trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
+
+        query = f"""
+        WITH recent_data AS (
+            SELECT * FROM (
+                SELECT *,
+                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
+                FROM {table_name}
+            ) WHERE rn <= {required_rows}
+        ),
+        calc_ma AS (
+            SELECT
+                *,
+                {ma_select_str}
+            FROM recent_data
+        ),
+        trend AS (
+            SELECT
+                *,
+                {trend_select}
+            FROM calc_ma
+            WHERE {' AND '.join(f'{line} IS NOT NULL' for line in lines)}
+        )
+        SELECT ticker
+        FROM trend
+        WHERE rn <= {duration}
+        GROUP BY ticker
+        HAVING SUM(is_converged) = {duration};
+        """
+
+        from core.database import connect_sqlite
+
+        conn = connect_sqlite()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            return {r[0] for r in rows}
+        finally:
+            cursor.close()
+            conn.close()
+
+    async def _handle_ma_convergence_point(self, params: dict[str, Any]) -> set[str]:
+        """수렴 지점(이벤트 발생) 판별 필터"""
+        lines = params.get("lines", [])
+        threshold = params.get("threshold", 2.0)
+        within = params.get("within", 1)
+
+        if not lines or len(lines) < 2:
+            return set()
+
+        windows = {
+            "ma_daily_5": 4, "ma_daily_20": 19, "ma_daily_60": 59, "ma_daily_120": 119,
+            "ma5": 4, "ma10": 9, "ma20": 19, "ma60": 59, "ma120": 119,
+        }
+
+        is_daily = any("daily" in ma_line for ma_line in lines)
+        table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
+        order_clause = "date ASC" if is_daily else "date ASC, time ASC"
+        order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
+
+        max_candles = 200 if is_daily else 1950
+        max_window = max(windows.get(ma_line, 0) for ma_line in lines)
+        if within > max_candles - max_window - 1:
+            raise ValueError(f"지정된 within({within})이 GC 보관 주기를 초과합니다.")
+
+        required_rows = max_window + within + 1
+
+        ma_selects = []
+        for ma_line in lines:
+            w = windows.get(ma_line, 0)
+            ma_selects.append(
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"ELSE NULL END as {ma_line}"
+            )
+        
+        ma_select_str = ",\n                ".join(ma_selects)
+        
+        max_func = f"MAX({', '.join(lines)})"
+        min_func = f"MIN({', '.join(lines)})"
+        
+        convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
+        trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
+
+        query = f"""
+        WITH recent_data AS (
+            SELECT * FROM (
+                SELECT *,
+                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
+                FROM {table_name}
+            ) WHERE rn <= {required_rows}
+        ),
+        calc_ma AS (
+            SELECT
+                *,
+                {ma_select_str}
+            FROM recent_data
+        ),
+        trend AS (
+            SELECT
+                *,
+                {trend_select}
+            FROM calc_ma
+            WHERE {' AND '.join(f'{line} IS NOT NULL' for line in lines)}
+        )
+        SELECT ticker
+        FROM trend
+        WHERE rn <= {within}
+          AND is_converged = 1
+        GROUP BY ticker;
+        """
+
+        from core.database import connect_sqlite
+
+        conn = connect_sqlite()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            return {r[0] for r in rows}
+        finally:
+            cursor.close()
+            conn.close()
 
     async def _fetch_investor_rank(self, etc_cls_code: str, limit: int = 30) -> set[str]:
         """
