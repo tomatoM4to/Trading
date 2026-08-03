@@ -59,6 +59,7 @@
 
 ## 6. 핵심 코드 패턴 (Patterns)
 - **SQLite Push-down & 엄격한 윈도우 연산**: 이평선 정배열 및 크로스 등 기술적 지표 필터링은 파이썬으로 데이터를 가져오지 않고, SQLite Window Function(`LAG`, `ROW_NUMBER` 등)과 CTE를 활용해 DB 엔진 단에서 조건을 판별(Push-down)하고 결과 Ticker만 반환하도록 작성한다. 또한 데이터(캔들) 개수가 부족할 때 발생하는 수학적 왜곡(False Positive)을 막기 위해 윈도우 연산 시 반드시 `CASE WHEN COUNT(...) = N` 조건으로 데이터 무결성을 검증하고 실패 시 `NULL`을 리턴해야 한다. (참고: `ADR-016`)
+- **스크리너 Pre-filter 최적화 (파티션 축소)**: 윈도우 함수 등 무거운 연산을 수행하는 스크리너 쿼리는 연산 전 반드시 `WITH active_tickers` CTE를 사용하여 `stock_codes` 테이블에서 매매 불가 종목(거래정지 `is_halted=1`, 관리종목 `is_admin_issue=1`)을 선행 필터링(Pre-filter)한 후 메인 테이블과 조인해야 한다. 이를 통해 윈도우 함수가 불필요한 종목까지 파티셔닝하는 리소스 낭비를 원천 차단한다. (참고: `ADR-020`)
 - **스칼라 서브쿼리를 이용한 데이터 확장 (Enrichment)**: 스크리너 등에서 소수의 결과 집합(Result Set)에 대한 추가 지표(최신 현재가, 거래대금 등)를 가져올 때는 무거운 JOIN이나 파이썬 맵핑 대신, SELECT 절 내부에 `ORDER BY date DESC LIMIT 1` 형태의 스칼라 서브쿼리를 작성하여 B-Tree 인덱스 스캔을 유도한다. (참고: `ADR-017`)
 - **실시간 점진적 피드백 (Progressive Feedback)**: 다중 교집합(스크리너 등)과 같이 연산이 길어져 1분 이상 걸릴 수 있는 무거운 파이프라인 실행 시, 클라이언트 타임아웃 방지 및 좋은 UX를 위해 별도의 비동기 큐 없이 FastAPI의 `StreamingResponse(text/event-stream)`를 활용한 SSE 방식을 최우선 적용한다. (참고: `ADR-018`)
 - **로깅 규칙**: 스케줄러 및 백그라운드 작업의 로깅은 표준 `info` 대신 반드시 커스텀 레벨인 `logger.sched(...)`를 사용하여 로그 가독성을 유지한다.

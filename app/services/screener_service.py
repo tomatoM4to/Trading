@@ -195,11 +195,16 @@ class ScreenerEngine:
         ma_select_str = ",\n                ".join(ma_selects)
 
         query = f"""
-        WITH recent_data AS (
+        WITH active_tickers AS (
+            SELECT ticker FROM stock_codes 
+            WHERE is_halted = 0 AND is_admin_issue = 0
+        ),
+        recent_data AS (
             SELECT * FROM (
-                SELECT *,
-                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name}
+                SELECT d.*,
+                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc_clause}) as rn
+                FROM {table_name} d
+                JOIN active_tickers a ON d.ticker = a.ticker
             ) WHERE rn <= {required_rows}
         ),
         calc_ma AS (
@@ -281,11 +286,16 @@ class ScreenerEngine:
             cross_cond = f"(prev_{short_line} >= prev_{long_line} AND curr_{short_line} < curr_{long_line})"
 
         query = f"""
-        WITH recent_data AS (
+        WITH active_tickers AS (
+            SELECT ticker FROM stock_codes 
+            WHERE is_halted = 0 AND is_admin_issue = 0
+        ),
+        recent_data AS (
             SELECT * FROM (
-                SELECT *,
-                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name}
+                SELECT d.*,
+                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc_clause}) as rn
+                FROM {table_name} d
+                JOIN active_tickers a ON d.ticker = a.ticker
             ) WHERE rn <= {required_rows}
         ),
         calc_ma AS (
@@ -370,11 +380,16 @@ class ScreenerEngine:
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
         query = f"""
-        WITH recent_data AS (
+        WITH active_tickers AS (
+            SELECT ticker FROM stock_codes 
+            WHERE is_halted = 0 AND is_admin_issue = 0
+        ),
+        recent_data AS (
             SELECT * FROM (
-                SELECT *,
-                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name}
+                SELECT d.*,
+                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc_clause}) as rn
+                FROM {table_name} d
+                JOIN active_tickers a ON d.ticker = a.ticker
             ) WHERE rn <= {required_rows}
         ),
         calc_ma AS (
@@ -453,11 +468,16 @@ class ScreenerEngine:
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
         query = f"""
-        WITH recent_data AS (
+        WITH active_tickers AS (
+            SELECT ticker FROM stock_codes 
+            WHERE is_halted = 0 AND is_admin_issue = 0
+        ),
+        recent_data AS (
             SELECT * FROM (
-                SELECT *,
-                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name}
+                SELECT d.*,
+                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc_clause}) as rn
+                FROM {table_name} d
+                JOIN active_tickers a ON d.ticker = a.ticker
             ) WHERE rn <= {required_rows}
         ),
         calc_ma AS (

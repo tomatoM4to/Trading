@@ -1,4 +1,4 @@
-- [x] Task 1: 스크리너 엔진 스펙 문서(`docs/screener.md`) 업데이트 (신규 2종 필터 파라미터 명세 작성)
-- [x] Task 2: `screener_service.py` 의 `filter_handlers` 맵핑에 `ma_convergence_consolidation`, `ma_convergence_point` 핸들러 등록
-- [x] Task 3: `_handle_ma_convergence_consolidation` 메서드 구현 (Min-Max 기반 SQLite 윈도우 함수 CTE 작성 및 연속 유지 검증)
-- [x] Task 4: `_handle_ma_convergence_point` 메서드 구현 (동일한 Min-Max CTE 기반, 최근 N 캔들 이내 터치 검증)
+- [x] Task 1: `_handle_ma_alignment` 쿼리 최적화 (active_tickers JOIN)
+- [x] Task 2: `_handle_ma_cross` 쿼리 최적화 (active_tickers JOIN)
+- [x] Task 3: `_handle_ma_convergence_consolidation` 쿼리 최적화 (active_tickers JOIN)
+- [x] Task 4: `_handle_ma_convergence_point` 쿼리 최적화 (active_tickers JOIN)
