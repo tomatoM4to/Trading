@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FilterBlock, FilterNodeState, FilterStatus } from "./FilterBlock";
 import { LogicOp, LogicOperator } from "./LogicOperator";
 import { ScreenerResultTable, ScreenerResult } from "./ScreenerResultTable";
@@ -38,6 +38,19 @@ export function ScreenerBuilder() {
   const [isLoading, setIsLoading] = useState(false);
   const [filterStatuses, setFilterStatuses] = useState<Record<string, FilterStatus>>({});
   const [remainingCount, setRemainingCount] = useState<number | null>(null);
+
+  const [startTime, setStartTime] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState<number>(0);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isLoading && startTime !== null) {
+      interval = setInterval(() => {
+        setElapsedMs(Date.now() - startTime);
+      }, 100);
+    }
+    return () => clearInterval(interval);
+  }, [isLoading, startTime]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
 
@@ -85,11 +98,11 @@ export function ScreenerBuilder() {
   const handleRunQuery = async () => {
     // 1. 유효성 검사
     const invalidFilter = filters.find(f => {
-      if (f.type === "ma_alignment") {
+      if (f.type === "ma_alignment" || f.type === "ma_convergence_consolidation") {
         const duration = Number(f.params.duration);
         return isNaN(duration) || duration < 1;
       }
-      if (f.type === "ma_cross") {
+      if (f.type === "ma_cross" || f.type === "ma_convergence_point") {
         const within = Number(f.params.within);
         return isNaN(within) || within < 1;
       }
@@ -121,6 +134,24 @@ export function ScreenerBuilder() {
             direction: f.params.direction,
             within: Number(f.params.within)
           };
+        } else if (f.type === "ma_convergence_consolidation") {
+          const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
+          const lines = ((f.params.selected_lines as string[]) || []).map((val: string) => `${prefix}${val}`);
+          backendParams = {
+            lines,
+            threshold: Number(f.params.threshold),
+            duration: Number(f.params.duration)
+          };
+        } else if (f.type === "ma_convergence_point") {
+          const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
+          const lines = ((f.params.selected_lines as string[]) || []).map((val: string) => `${prefix}${val}`);
+          backendParams = {
+            lines,
+            threshold: Number(f.params.threshold),
+            within: Number(f.params.within)
+          };
+        } else if (f.type === "foreign_net_buy_rank" || f.type === "inst_net_buy_rank") {
+          backendParams = { limit: 30 };
         }
 
         return {
@@ -137,6 +168,8 @@ export function ScreenerBuilder() {
 
       console.log("Run Screener with payload:", payload);
       setIsLoading(true);
+      setStartTime(Date.now());
+      setElapsedMs(0);
       
       const initialStatuses: Record<string, FilterStatus> = {};
       filters.forEach(f => initialStatuses[f.id] = "idle");
@@ -239,6 +272,13 @@ export function ScreenerBuilder() {
               실시간 남은 종목: <span className="text-2xl text-primary font-bold">{remainingCount.toLocaleString()}</span> 개
             </div>
           )}
+          
+          {(isLoading || elapsedMs > 0) && (
+            <div className="text-sm font-mono font-medium bg-muted/50 px-3 py-1.5 rounded-md border text-muted-foreground flex items-center shadow-sm">
+              ⏱ {(elapsedMs / 1000).toFixed(1)}s
+            </div>
+          )}
+
           <Button
             size="lg"
             className="w-full sm:w-auto font-bold tracking-wide shadow-md"

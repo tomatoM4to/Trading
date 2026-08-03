@@ -55,9 +55,11 @@
 - **메모리 제한 (Set-Theory Pipeline)**: 1GB RAM 환경이므로 전 종목(2,400개) 데이터를 한 번에 메모리에 올리거나 Pandas로 대규모 병합(Merge)하는 로직을 절대 작성하지 않는다. 스크리너나 다중 지표 교집합 연산을 수행할 때는 반드시 **종목 코드 집합(`Set[str]`) 단위로만 데이터를 교환하고, 파이썬 내장 `&` (교집합) 연산**으로 메모리 사용을 최소화한다. (참고: `ADR-014`)
 - **API Rate Limit 방어**: KIS API의 초당 20회 통신 제한을 방어하는 `Global Rate-Limiting Queue`의 딜레이 시간(`sleep(0.1)`)을 임의로 줄이거나 삭제하지 않는다. 스크리너 연산 시 외부 수급 API 등은 '지연 평가(Late Evaluation)' 또는 '랭킹 Bulk 호출'로 N+1 문제를 원천 차단한다.
 - **보안 및 자격 증명**: `.env` 파일의 내용이나 KIS API Secret 정보를 소스 코드에 절대 하드코딩하지 않는다.
+- **KIS 랭킹 API 제약 수용**: `FHPTJ04400000` (외국인/기관 가집계) 등 특정 KIS 랭킹 API는 HTS 화면과 동일하게 최대 30건만 고정 반환하며 연속조회(`tr_cont`)를 지원하지 않습니다. 억지로 페이지네이션을 구현하거나 개별 종목 N+1 호출로 우회하려 하지 말고 30건 제약을 그대로 수용하여 Bulk 연산을 수행합니다. (참고: `docs/decisions/ADR-019-kis-ranking-api-30-limit.md`)
 
 ## 6. 핵심 코드 패턴 (Patterns)
 - **SQLite Push-down & 엄격한 윈도우 연산**: 이평선 정배열 및 크로스 등 기술적 지표 필터링은 파이썬으로 데이터를 가져오지 않고, SQLite Window Function(`LAG`, `ROW_NUMBER` 등)과 CTE를 활용해 DB 엔진 단에서 조건을 판별(Push-down)하고 결과 Ticker만 반환하도록 작성한다. 또한 데이터(캔들) 개수가 부족할 때 발생하는 수학적 왜곡(False Positive)을 막기 위해 윈도우 연산 시 반드시 `CASE WHEN COUNT(...) = N` 조건으로 데이터 무결성을 검증하고 실패 시 `NULL`을 리턴해야 한다. (참고: `ADR-016`)
+- **스크리너 Pre-filter 최적화 (파티션 축소)**: 윈도우 함수 등 무거운 연산을 수행하는 스크리너 쿼리는 연산 전 반드시 `WITH active_tickers` CTE를 사용하여 `stock_codes` 테이블에서 매매 불가 종목(거래정지 `is_halted=1`, 관리종목 `is_admin_issue=1`)을 선행 필터링(Pre-filter)한 후 메인 테이블과 조인해야 한다. 이를 통해 윈도우 함수가 불필요한 종목까지 파티셔닝하는 리소스 낭비를 원천 차단한다. (참고: `ADR-020`)
 - **스칼라 서브쿼리를 이용한 데이터 확장 (Enrichment)**: 스크리너 등에서 소수의 결과 집합(Result Set)에 대한 추가 지표(최신 현재가, 거래대금 등)를 가져올 때는 무거운 JOIN이나 파이썬 맵핑 대신, SELECT 절 내부에 `ORDER BY date DESC LIMIT 1` 형태의 스칼라 서브쿼리를 작성하여 B-Tree 인덱스 스캔을 유도한다. (참고: `ADR-017`)
 - **실시간 점진적 피드백 (Progressive Feedback)**: 다중 교집합(스크리너 등)과 같이 연산이 길어져 1분 이상 걸릴 수 있는 무거운 파이프라인 실행 시, 클라이언트 타임아웃 방지 및 좋은 UX를 위해 별도의 비동기 큐 없이 FastAPI의 `StreamingResponse(text/event-stream)`를 활용한 SSE 방식을 최우선 적용한다. (참고: `ADR-018`)
 - **로깅 규칙**: 스케줄러 및 백그라운드 작업의 로깅은 표준 `info` 대신 반드시 커스텀 레벨인 `logger.sched(...)`를 사용하여 로그 가독성을 유지한다.

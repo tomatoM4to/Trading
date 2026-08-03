@@ -1,36 +1,29 @@
-# Implementation Plan: Screener Real-time Progress UX (via SSE)
+# 스크리너 쿼리 최적화 계획 (Pre-filter)
 
-## Overview
-다중 필터 스크리너 연산 시 길어지는 대기 시간으로 인한 HTTP 타임아웃을 막고, 유저에게 현재 실행 중인 필터와 실시간으로 좁혀지는 종목 수를 시각적으로 피드백(Progressive Rendering)하기 위해 SSE(Server-Sent Events) 아키텍처를 도입합니다.
+## 1. 개요
+스크리너 파이프라인에서 무거운 윈도우 함수 연산을 수행하기 전, `stock_codes` 테이블을 조인하여 거래정지(`is_halted=1`) 및 관리종목(`is_admin_issue=1`)을 사전 제외(Pre-filter)함으로써 DB 리소스 낭비를 막고 검색 속도를 향상시킵니다. 단기과열이나 투자경고 종목은 매매가 가능하므로 필터링하지 않습니다.
 
-## Architecture Decisions
-- **SSE with POST Payload**: 복잡한 필터 AST 페이로드를 전달해야 하므로 GET 방식의 브라우저 기본 `EventSource` 대신, `fetch` 기반의 스트림 리더 혹은 `@microsoft/fetch-event-source`를 사용하여 POST 방식으로 SSE를 수신합니다.
-- **FastAPI StreamingResponse**: 별도의 비동기 큐(Celery/Redis) 없이 FastAPI 내장 `StreamingResponse`를 사용하여, 각 필터 연산이 완료될 때마다 즉시 `data: {...}\n\n` 형태의 이벤트를 푸시합니다.
-- **Set Length for O(1) Progress**: 종목 교집합(`set`)의 크기(`len()`)를 구하는 비용은 O(1)이므로, 필터 연산 중간중간 남은 종목 수를 전달하여 서버 부하 없이 완벽한 점진적 피드백 UX를 완성합니다.
+## 2. 작업 대상
+`app/services/screener_service.py` 내의 다음 4가지 핸들러 메서드의 내부 SQLite 쿼리:
+1. `_handle_ma_alignment`
+2. `_handle_ma_cross`
+3. `_handle_ma_convergence_consolidation`
+4. `_handle_ma_convergence_point`
 
-## Task List
-
-### Phase 1: Backend SSE Streaming Foundation
-- [ ] Task 1: 백엔드 스키마 및 SSE 스트리밍 로직 구현
-
-### Checkpoint: Backend Complete
-- [ ] curl 통신 테스트 시 `data: {"type": "progress", ...}` 청크(Chunk)가 순차적으로 밀려 들어오는가?
-- [ ] 마지막에 `data: {"type": "complete", "items": [...]}`가 정상 반환되는가?
-
-### Phase 2: Frontend SSE Consumer & UX
-- [ ] Task 2: 프론트엔드 POST SSE 스트림 수신 로직 구현 (fetch-event-source 적용)
-- [ ] Task 3: 프론트엔드 개별 필터 스피너/체크마크 UX 및 남은 종목 수 렌더링
-
-### Checkpoint: Complete
-- [ ] 스크리너 "실행" 버튼 클릭 시, 화면 상의 개별 필터 블록에 순차적으로 로딩(Spinner)과 완료(Check) 표시가 렌더링되는가?
-- [ ] 중간 종목 수가 표시되고, 최종 테이블이 정상적으로 렌더링되는가?
-- [ ] Ready for review
-
-## Risks and Mitigations
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| 프론트엔드 상태 업데이트 빈도 문제 | Med | 리렌더링 최적화를 위해 React 상태를 너무 잘게 쪼개지 않고, filterStatus 맵 하나로 통합 관리 |
-| KIS API Rate Limit 또는 DB 락 | Low | 이미 파이프라인(Set 연산)과 스칼라 서브쿼리가 고도로 최적화되어 있으므로, 단순히 렌더링 과정(스트리밍)만 쪼개는 것은 백엔드 부하를 전혀 가중시키지 않음 |
-
-## Open Questions
-- 개별 필터의 완료 상태를 `FilterBlock` 안쪽에 아이콘으로 그릴지, 아니면 우측에 배지 형태로 그릴지 미세 조정 필요.
+## 3. 구현 전략
+각 쿼리의 `WITH` 절 맨 위에 `active_tickers` CTE를 추가합니다.
+```sql
+WITH active_tickers AS (
+    SELECT ticker FROM stock_codes 
+    WHERE is_halted = 0 AND is_admin_issue = 0
+),
+recent_data AS (
+    SELECT * FROM (
+        SELECT d.*,
+               ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY d.date DESC) as rn
+        FROM {table_name} d
+        JOIN active_tickers a ON d.ticker = a.ticker
+    ) WHERE rn <= {required_rows}
+)
+```
+이렇게 하면 윈도우 함수(`ROW_NUMBER`, `COUNT`, `AVG` 등)가 평가될 파티션(종목)의 개수가 근본적으로 감소하여 속도 및 메모리 이점이 발생합니다.

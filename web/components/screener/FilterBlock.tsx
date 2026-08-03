@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { X, Settings2, Loader2, CheckCircle2 } from "lucide-react";
 
-export type FilterType = "ma_alignment" | "ma_cross" | "convergence" | "foreign_buy";
+export type FilterType = "ma_alignment" | "ma_cross" | "ma_convergence_consolidation" | "ma_convergence_point" | "foreign_net_buy_rank" | "inst_net_buy_rank";
 
 export type FilterStatus = "idle" | "processing" | "done";
 
@@ -31,6 +31,12 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
       defaultParams = { timeframe: "daily", selected_lines: ["5", "20", "60"], duration: 3 };
     } else if (val === "ma_cross") {
       defaultParams = { timeframe: "daily", short_line: "5", long_line: "20", within: 1, direction: "golden" };
+    } else if (val === "ma_convergence_consolidation") {
+      defaultParams = { timeframe: "daily", selected_lines: ["5", "20", "60"], threshold: 2.0, duration: 3 };
+    } else if (val === "ma_convergence_point") {
+      defaultParams = { timeframe: "daily", selected_lines: ["5", "20", "60"], threshold: 2.0, within: 1 };
+    } else if (val === "foreign_net_buy_rank" || val === "inst_net_buy_rank") {
+      defaultParams = { limit: 30 };
     }
     onUpdate(filter.id, { ...filter, type: val, params: defaultParams });
   };
@@ -79,8 +85,10 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
             <SelectContent>
               <SelectItem value="ma_alignment">이평선 정배열</SelectItem>
               <SelectItem value="ma_cross">이평선 크로스</SelectItem>
-              <SelectItem value="convergence">이평선 수렴</SelectItem>
-              <SelectItem value="foreign_buy">외국인 순매수</SelectItem>
+              <SelectItem value="ma_convergence_consolidation">이평선 수렴 횡보 (유지)</SelectItem>
+              <SelectItem value="ma_convergence_point">이평선 수렴 지점 (이벤트)</SelectItem>
+              <SelectItem value="foreign_net_buy_rank">외국인 순매수 상위 랭킹</SelectItem>
+              <SelectItem value="inst_net_buy_rank">기관 순매수 상위 랭킹</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -206,15 +214,78 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
             </>
           )}
 
-          {filter.type === "convergence" && (
-            <div className="text-sm text-muted-foreground p-2">
-              (개발 예정) 수렴 조건 파라미터 UI
-            </div>
+          {(filter.type === "ma_convergence_consolidation" || filter.type === "ma_convergence_point") && (
+            <>
+              <div className="flex-1 min-w-[120px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">타임프레임</label>
+                <Select
+                  value={String(filter.params.timeframe || "daily")}
+                  onValueChange={(val) => val && handleParamChange("timeframe", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="주기" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">일봉 (Daily)</SelectItem>
+                    <SelectItem value="minute">분봉 (Minute)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-auto min-w-[200px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-2 block">이평선 선택 (Lines)</label>
+                <div className="flex items-center gap-3">
+                  {["5", "10", "20", "60", "120"].map((line) => {
+                    const isChecked = ((filter.params.selected_lines as string[]) || []).includes(line);
+                    return (
+                      <div key={line} className="flex items-center space-x-1">
+                        <Checkbox
+                          id={`${filter.id}-line-${line}`}
+                          checked={isChecked}
+                          onCheckedChange={() => toggleLine(line)}
+                        />
+                        <label
+                          htmlFor={`${filter.id}-line-${line}`}
+                          className="text-sm font-medium leading-none cursor-pointer"
+                        >
+                          {line}
+                        </label>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">오차율 (%)</label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  min={0}
+                  value={(filter.params.threshold as string | number) ?? ""}
+                  onChange={(e) => handleParamChange("threshold", e.target.value)}
+                />
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">
+                  {filter.type === "ma_convergence_consolidation" ? "유지 기간" : "최근 N일/분 이내"}
+                </label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={
+                    (filter.type === "ma_convergence_consolidation" 
+                      ? filter.params.duration 
+                      : filter.params.within) as string | number ?? ""
+                  }
+                  onChange={(e) => handleParamChange(filter.type === "ma_convergence_consolidation" ? "duration" : "within", e.target.value)}
+                />
+              </div>
+            </>
           )}
 
-          {filter.type === "foreign_buy" && (
-             <div className="text-sm text-muted-foreground p-2">
-               (개발 예정) 외국인 순매수 조건 파라미터 UI
+          {(filter.type === "foreign_net_buy_rank" || filter.type === "inst_net_buy_rank") && (
+             <div className="text-sm text-muted-foreground p-2 bg-muted/20 rounded-md">
+               (KIS 정책상 상위 30개 고정 반환)
              </div>
           )}
         </div>
