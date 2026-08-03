@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FilterBlock, FilterNodeState, FilterStatus } from "./FilterBlock";
 import { LogicOp, LogicOperator } from "./LogicOperator";
 import { ScreenerResultTable, ScreenerResult } from "./ScreenerResultTable";
@@ -38,6 +38,19 @@ export function ScreenerBuilder() {
   const [isLoading, setIsLoading] = useState(false);
   const [filterStatuses, setFilterStatuses] = useState<Record<string, FilterStatus>>({});
   const [remainingCount, setRemainingCount] = useState<number | null>(null);
+
+  const [startTime, setStartTime] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState<number>(0);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isLoading && startTime !== null) {
+      interval = setInterval(() => {
+        setElapsedMs(Date.now() - startTime);
+      }, 100);
+    }
+    return () => clearInterval(interval);
+  }, [isLoading, startTime]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
 
@@ -139,6 +152,8 @@ export function ScreenerBuilder() {
 
       console.log("Run Screener with payload:", payload);
       setIsLoading(true);
+      setStartTime(Date.now());
+      setElapsedMs(0);
       
       const initialStatuses: Record<string, FilterStatus> = {};
       filters.forEach(f => initialStatuses[f.id] = "idle");
@@ -241,6 +256,13 @@ export function ScreenerBuilder() {
               실시간 남은 종목: <span className="text-2xl text-primary font-bold">{remainingCount.toLocaleString()}</span> 개
             </div>
           )}
+          
+          {(isLoading || elapsedMs > 0) && (
+            <div className="text-sm font-mono font-medium bg-muted/50 px-3 py-1.5 rounded-md border text-muted-foreground flex items-center shadow-sm">
+              ⏱ {(elapsedMs / 1000).toFixed(1)}s
+            </div>
+          )}
+
           <Button
             size="lg"
             className="w-full sm:w-auto font-bold tracking-wide shadow-md"
