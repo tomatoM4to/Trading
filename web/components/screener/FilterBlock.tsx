@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { X, Settings2, Loader2, CheckCircle2 } from "lucide-react";
 
-export type FilterType = "ma_alignment" | "ma_cross" | "convergence" | "foreign_buy";
+export type FilterType = "ma_alignment" | "ma_cross" | "convergence" | "foreign_net_buy_rank" | "inst_net_buy_rank";
 
 export type FilterStatus = "idle" | "processing" | "done";
 
@@ -31,6 +31,8 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
       defaultParams = { timeframe: "daily", selected_lines: ["5", "20", "60"], duration: 3 };
     } else if (val === "ma_cross") {
       defaultParams = { timeframe: "daily", short_line: "5", long_line: "20", within: 1, direction: "golden" };
+    } else if (val === "foreign_net_buy_rank" || val === "inst_net_buy_rank") {
+      defaultParams = { limit: 30 };
     }
     onUpdate(filter.id, { ...filter, type: val, params: defaultParams });
   };
@@ -80,7 +82,8 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
               <SelectItem value="ma_alignment">이평선 정배열</SelectItem>
               <SelectItem value="ma_cross">이평선 크로스</SelectItem>
               <SelectItem value="convergence">이평선 수렴</SelectItem>
-              <SelectItem value="foreign_buy">외국인 순매수</SelectItem>
+              <SelectItem value="foreign_net_buy_rank">외국인 순매수 상위 랭킹</SelectItem>
+              <SelectItem value="inst_net_buy_rank">기관 순매수 상위 랭킹</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -212,9 +215,9 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
             </div>
           )}
 
-          {filter.type === "foreign_buy" && (
-             <div className="text-sm text-muted-foreground p-2">
-               (개발 예정) 외국인 순매수 조건 파라미터 UI
+          {(filter.type === "foreign_net_buy_rank" || filter.type === "inst_net_buy_rank") && (
+             <div className="text-sm text-muted-foreground p-2 bg-muted/20 rounded-md">
+               (KIS 정책상 상위 30개 고정 반환)
              </div>
           )}
         </div>

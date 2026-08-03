@@ -121,6 +121,8 @@ export function ScreenerBuilder() {
             direction: f.params.direction,
             within: Number(f.params.within)
           };
+        } else if (f.type === "foreign_net_buy_rank" || f.type === "inst_net_buy_rank") {
+          backendParams = { limit: 30 };
         }
 
         return {

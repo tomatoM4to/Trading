@@ -10,7 +10,8 @@ class ScreenerEngine:
             "ma_alignment": self._handle_ma_alignment,
             "ma_cross": self._handle_ma_cross,
             "convergence": self._handle_convergence,
-            "foreign_buy": self._handle_foreign_buy,
+            "foreign_net_buy_rank": self._handle_foreign_net_buy_rank,
+            "inst_net_buy_rank": self._handle_inst_net_buy_rank,
         }
 
     async def run_pipeline(self, request: ScreenerRequest) -> set[str]:
@@ -328,9 +329,60 @@ class ScreenerEngine:
         """이평선 수렴 판별 필터 (SQLite)"""
         return set()
 
-    async def _handle_foreign_buy(self, params: dict[str, Any]) -> set[str]:
-        """외국인 순매수 필터 (KIS API)"""
-        return set()
+    async def _fetch_investor_rank(self, etc_cls_code: str, limit: int = 30) -> set[str]:
+        """
+        KIS OpenAPI (FHPTJ04400000) 가집계 랭킹 API 호출.
+        etc_cls_code: "1" (외국인), "2" (기관계)
+        """
+        from core.kis_fetch import async_kis_fetch
+        
+        tickers = []
+        
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "V",
+            "FID_COND_SCR_DIV_CODE": "16449",
+            "FID_INPUT_ISCD": "0000",
+            "FID_DIV_CLS_CODE": "0",  # 0: 수량정렬
+            "FID_RANK_SORT_CLS_CODE": "0",  # 0: 순매수상위
+            "FID_ETC_CLS_CODE": etc_cls_code
+        }
+        
+        # 첫 번째 페이지 조회 (최대 30건)
+        res = await async_kis_fetch(
+            api_url="/uapi/domestic-stock/v1/quotations/foreign-institution-total",
+            ptr_id="FHPTJ04400000",
+            tr_cont="",
+            params=params,
+            priority=5
+        )
+        
+        if res.is_ok():
+            body = res.get_body()
+            output = getattr(body, "output", []) or []
+            
+            for item in output:
+                ticker = item.get("mksc_shrn_iscd") or item.get("stck_shrn_iscd")
+                if ticker:
+                    tickers.append(ticker)
+            
+            # KIS API "국내기관_외국인 매매종목가집계"는 상위 30건으로 고정되어 있으며 연속조회를 지원하지 않습니다.
+            # 중복 제거 후 반환 (단일 호출로 30건)
+            unique_tickers = []
+            for t in tickers:
+                if t not in unique_tickers:
+                    unique_tickers.append(t)
+                    
+            return set(unique_tickers[:limit])
+
+    async def _handle_foreign_net_buy_rank(self, params: dict[str, Any]) -> set[str]:
+        """외국인 순매수 상위 필터"""
+        limit = params.get("limit", 30)
+        return await self._fetch_investor_rank(etc_cls_code="1", limit=limit)
+
+    async def _handle_inst_net_buy_rank(self, params: dict[str, Any]) -> set[str]:
+        """기관 순매수 상위 필터"""
+        limit = params.get("limit", 30)
+        return await self._fetch_investor_rank(etc_cls_code="2", limit=limit)
 
 
 screener_engine = ScreenerEngine()
