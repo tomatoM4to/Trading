@@ -28,7 +28,7 @@ def get_minute_last_times(markets: list[str] | None = None) -> dict[str, str]:
         # 문자열 결합(||)으로 YYYYMMDDHHMMSS 생성 후 MAX
         cursor.execute(
             f"""
-            SELECT d.ticker, MAX(d.date || d.time) as last_datetime
+            SELECT d.ticker, MAX(CAST(d.date AS TEXT) || printf('%06d', d.time)) as last_datetime
             FROM minute_ohlcv d
             JOIN stock_codes s ON d.ticker = s.ticker
             WHERE s.market IN ({placeholders})

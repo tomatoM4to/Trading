@@ -3,8 +3,8 @@
 본 문서는 Trading Server의 핵심이 되는 SQLite 데이터베이스(`trading.db`)의 스키마 구조와 Zero-Latency 아키텍처 구현을 위한 상세 설계 철학을 명시합니다.
 
 ## 0. 핵심 설계 철학
-- **SQLite 기반 Zero-Latency 아키텍처**: 모든 트레이딩 전략(돌파 매매 등)과 핫리스트 추출은 KIS API에 실시간으로 의존하지 않고, 오직 로컬 SQLite DB만을 조회하여 연산 지연을 0에 가깝게 만듭니다.
-- **WAL 모드 (Write-Ahead Logging)**: 1개의 SQLite 파일을 다중 워커가 동시에 읽고 쓸 수 있도록 WAL 저널 모드를 활성화하여 동시성 성능을 극대화합니다.
+- **SQLite 기반 Zero-Latency 아키텍처 (In-Memory)**: 모든 트레이딩 전략(돌파 매매 등)과 핫리스트 추출은 KIS API에 실시간으로 의존하지 않고, 오직 로컬 SQLite DB만을 조회하여 연산 지연을 0에 가깝게 만듭니다. 이를 위해 부팅 시 물리적 디스크 DB를 **Shared In-Memory DB**로 100% 로드하며, 커넥션 단절 시 메모리 DB가 삭제(GC)되는 것을 막기 위해 `_keepalive_conn`을 띄워둡니다. 모든 임시 연산(`temp_store`)도 메모리에서 수행합니다 (참고: ADR-022).
+- **디스크 I/O 최적화 (WAL & 압축)**: 디스크 스토리지 용량을 절약하고 In-Memory 로딩 시간을 단축하기 위해 모든 테이블은 `WITHOUT ROWID, STRICT` 구조를 띕니다. 불필요한 자동 인덱스를 제거하고, `date`와 `time`을 `INTEGER`로 강제 형변환하여 램(RAM)과 디스크 사용량을 극한으로 압축했습니다.
 - **자가 치유 (Self-Healing)**: DB 파일이 없거나 손상되었을 경우, 서버 부팅 시점에 즉시 테이블과 인덱스를 재생성하고 데이터 복구를 시작할 수 있는 구조를 지향합니다.
 
 ---
@@ -12,7 +12,7 @@
 ## 1. `stock_codes` (기준 마스터 테이블)
 2,400여 개의 순수 매매용 우량주 명단입니다. 
 
-### 테이블 스키마
+### 테이블 스키마 (WITHOUT ROWID, STRICT)
 | 컬럼명 | 타입 | 제약 조건 | 설명 |
 |---|---|---|---|
 | `ticker` | TEXT | PRIMARY KEY | 단축코드 (예: 005930) |
@@ -36,11 +36,11 @@
 ## 2. `daily_ohlcv` (일봉 테이블)
 전 종목의 과거 시계열 데이터(최소 400일 이상)를 저장합니다.
 
-### 테이블 스키마
+### 테이블 스키마 (WITHOUT ROWID, STRICT)
 | 컬럼명 | 타입 | 제약 조건 | 설명 |
 |---|---|---|---|
 | `ticker` | TEXT | PK (Composite) | 단축코드 |
-| `date` | TEXT | PK (Composite) | 거래일자 (YYYYMMDD 형식) |
+| `date` | INTEGER | PK (Composite) | 거래일자 (YYYYMMDD 형식 정수) |
 | `open` | INTEGER | | 시가 |
 | `high` | INTEGER | | 고가 |
 | `low` | INTEGER | | 저가 |
@@ -53,12 +53,12 @@
 ## 3. `minute_ohlcv` (분봉 테이블)
 장중 실시간 및 과거 분봉(1분봉 등) 데이터를 저장합니다.
 
-### 테이블 스키마
+### 테이블 스키마 (WITHOUT ROWID, STRICT)
 | 컬럼명 | 타입 | 제약 조건 | 설명 |
 |---|---|---|---|
 | `ticker` | TEXT | PK (Composite) | 단축코드 |
-| `date` | TEXT | PK (Composite) | 거래일자 (YYYYMMDD) |
-| `time` | TEXT | PK (Composite) | 거래시간 (HHMMSS) |
+| `date` | INTEGER | PK (Composite) | 거래일자 (YYYYMMDD 형식 정수) |
+| `time` | INTEGER | PK (Composite) | 거래시간 (HHMMSS 형식 정수, 9시=90000) |
 | `open` | INTEGER | | 시가 |
 | `high` | INTEGER | | 고가 |
 | `low` | INTEGER | | 저가 |

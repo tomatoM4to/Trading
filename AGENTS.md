@@ -58,6 +58,7 @@
 - **KIS 랭킹 API 제약 수용**: `FHPTJ04400000` (외국인/기관 가집계) 등 특정 KIS 랭킹 API는 HTS 화면과 동일하게 최대 30건만 고정 반환하며 연속조회(`tr_cont`)를 지원하지 않습니다. 억지로 페이지네이션을 구현하거나 개별 종목 N+1 호출로 우회하려 하지 말고 30건 제약을 그대로 수용하여 Bulk 연산을 수행합니다. (참고: `docs/decisions/ADR-019-kis-ranking-api-30-limit.md`)
 
 ## 6. 핵심 코드 패턴 (Patterns)
+- **In-Memory Zero-Latency 튜닝 (Memory & STRICT)**: 물리 디스크의 I/O 병목을 제거하기 위해 서버 부팅 시 DB를 `file::memory:?cache=shared`로 100% 로드하며, 익명 메모리 DB가 휘발되지 않도록 전역 `_keepalive_conn`을 유지한다. RAM 낭비 방지를 위해 모든 테이블은 `WITHOUT ROWID, STRICT` 속성을 갖추고 `date` 및 `time` 데이터는 `INTEGER`로 극한 압축한다. 임시 연산 역시 `PRAGMA temp_store = MEMORY`로 강제한다. (참고: `ADR-022`)
 - **SQLite Push-down & 엄격한 윈도우 연산**: 이평선 정배열 및 크로스 등 기술적 지표 필터링은 파이썬으로 데이터를 가져오지 않고, SQLite Window Function(`LAG`, `ROW_NUMBER` 등)과 CTE를 활용해 DB 엔진 단에서 조건을 판별(Push-down)하고 결과 Ticker만 반환하도록 작성한다. 또한 데이터(캔들) 개수가 부족할 때 발생하는 수학적 왜곡(False Positive)을 막기 위해 윈도우 연산 시 반드시 `CASE WHEN COUNT(...) = N` 조건으로 데이터 무결성을 검증하고 실패 시 `NULL`을 리턴해야 한다. (참고: `ADR-016`)
 - **Push-down 파라미터 엄격 검증 (Anti-Short-Circuit)**: SQLite 쿼리 옵티마이저가 `1=0`과 같은 더미 조건으로 인해 전체 무거운 CTE 연산을 건너뛰는(Short-circuit) 버그를 막기 위해, 스크리너 필터 핸들러는 SQL 문자열을 조립하기 전 반드시 모든 파라미터를 엄격하게 검증(Validation)하고 잘못된 값일 경우 예외(ValueError)를 던져야 한다. (참고: `ADR-021`)
 - **스크리너 Pre-filter 최적화 (파티션 축소)**: 윈도우 함수 등 무거운 연산을 수행하는 스크리너 쿼리는 연산 전 반드시 `WITH active_tickers` CTE를 사용하여 `stock_codes` 테이블에서 매매 불가 종목(거래정지 `is_halted=1`, 관리종목 `is_admin_issue=1`)을 선행 필터링(Pre-filter)한 후 메인 테이블과 조인해야 한다. 이를 통해 윈도우 함수가 불필요한 종목까지 파티셔닝하는 리소스 낭비를 원천 차단한다. (참고: `ADR-020`)
