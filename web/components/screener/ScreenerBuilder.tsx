@@ -180,7 +180,8 @@ export function ScreenerBuilder() {
 
       const ctrl = new AbortController();
 
-      await fetchEventSource("http://localhost:8000/api/screener/run", {
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      await fetchEventSource(`${API_BASE_URL}/api/screener/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

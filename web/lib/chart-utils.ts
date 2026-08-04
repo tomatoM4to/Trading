@@ -28,7 +28,7 @@ export function aggregateCandles(
   for (const point of data) {
     // "YYYY-MM-DD HH:MM:SS" -> KST 기준 타임스탬프(초)로 변환
     const dateObj = new Date(point.time.replace(" ", "T") + "+09:00");
-    const timestampSec = Math.floor(dateObj.getTime() / 1000);
+    const timestampSec = Math.floor(dateObj.getTime() / 1000) + 9 * 60 * 60;
     
     // 타임프레임 구간(초) 계산
     const intervalSec = minutes * 60;
@@ -70,7 +70,7 @@ export function aggregateCandles(
 function parseToTimestamp(point: ChartDataPoint): AggregatedCandle {
   const dateObj = new Date(point.time.replace(" ", "T") + "+09:00");
   return {
-    time: Math.floor(dateObj.getTime() / 1000) as Time,
+    time: (Math.floor(dateObj.getTime() / 1000) + 9 * 60 * 60) as Time,
     open: point.open,
     high: point.high,
     low: point.low,
@@ -96,7 +96,7 @@ export function aggregateDailyCandles(
 
   for (const point of data) {
     const dateObj = new Date(point.time.replace(" ", "T") + "+09:00");
-    const timestampSec = Math.floor(dateObj.getTime() / 1000);
+    const timestampSec = Math.floor(dateObj.getTime() / 1000) + 9 * 60 * 60;
     
     let groupKey = "";
     if (timeframe === "1M") {
@@ -170,7 +170,7 @@ export function extractLineSeriesData(
     }
 
     const dateObj = new Date(point.time.replace(" ", "T") + "+09:00");
-    const timestampSec = Math.floor(dateObj.getTime() / 1000);
+    const timestampSec = Math.floor(dateObj.getTime() / 1000) + 9 * 60 * 60;
     
     let groupKey = "";
     let gTime: Time = timestampSec as Time;
