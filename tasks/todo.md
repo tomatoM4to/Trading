@@ -1,4 +1,6 @@
-- [x] Task 1: `_handle_ma_alignment` 쿼리 최적화 (active_tickers JOIN)
-- [x] Task 2: `_handle_ma_cross` 쿼리 최적화 (active_tickers JOIN)
-- [x] Task 3: `_handle_ma_convergence_consolidation` 쿼리 최적화 (active_tickers JOIN)
-- [x] Task 4: `_handle_ma_convergence_point` 쿼리 최적화 (active_tickers JOIN)
+- [ ] Task 1: Create `scripts/benchmark_screener.py` with 10 benchmark payloads and the basic SSE execution loop.
+  - Acceptance: Script exists and has the payloads defined correctly matching the backend API.
+  - Verify: Visual inspection of the file.
+- [ ] Task 2: Implement CSV logging with timestamped filename.
+  - Acceptance: Script generates `screener_benchmark_YYYYMMDD_HHMMSS.csv` with correct headers and data.
+  - Verify: Run the script locally and check the CSV output.

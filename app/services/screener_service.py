@@ -245,6 +245,9 @@ class ScreenerEngine:
         within = params.get("within", 1)
         direction = params.get("direction", "golden") # "golden" or "dead"
 
+        if direction not in ("golden", "dead"):
+            raise ValueError(f"지원하지 않는 direction입니다: {direction}")
+
         if not short_line or not long_line:
             return set()
             
