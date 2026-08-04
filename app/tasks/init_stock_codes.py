@@ -124,7 +124,8 @@ def init_stock_codes_db():
     logger.info("Saving parsed stock codes to SQLite database...")
     conn = connect_sqlite()
     try:
-        combined_df.to_sql("stock_codes", conn, if_exists="replace", index=False)
+        conn.execute("DELETE FROM stock_codes")
+        combined_df.to_sql("stock_codes", conn, if_exists="append", index=False)
         logger.info(
             f"Successfully initialized {len(combined_df)} stock codes into database from CSV."
         )
