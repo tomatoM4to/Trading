@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickSeries, LineSeries } from "lightweight-charts";
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickSeries, LineSeries, HistogramSeries } from "lightweight-charts";
 import { AggregatedCandle, LineDataPoint } from "../../lib/chart-utils";
 
 export const MA_CONFIGS: Record<string, { color: string; title: string; lineWidth?: number }> = {
@@ -68,6 +68,22 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
     });
     seriesRef.current['candles'] = candleSeries;
 
+    // 거래량 시리즈 생성 (오버레이)
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      color: '#26a69a',
+      priceFormat: {
+        type: 'volume',
+      },
+      priceScaleId: '', // 오버레이로 설정
+    });
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: {
+        top: 0.8, // 상단 80%부터 시작하여 하단 20%만 차지함
+        bottom: 0,
+      },
+    });
+    seriesRef.current['volume'] = volumeSeries;
+
     // 이평선 시리즈 생성
     Object.entries(MA_CONFIGS).forEach(([key, config]) => {
       const lineSeries = chart.addSeries(LineSeries, {
@@ -95,6 +111,17 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
     // Update candle data
     if (seriesRef.current['candles']) {
       seriesRef.current['candles'].setData(candleData);
+    }
+    
+    // Update volume data
+    if (seriesRef.current['volume']) {
+      seriesRef.current['volume'].setData(
+        candleData.map(c => ({
+          time: c.time,
+          value: c.volume,
+          color: c.close >= c.open ? 'rgba(239, 83, 80, 0.4)' : 'rgba(38, 166, 154, 0.4)'
+        }))
+      );
     }
 
     // Update line data & visibility
