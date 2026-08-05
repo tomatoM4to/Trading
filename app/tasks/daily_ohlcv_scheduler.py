@@ -43,7 +43,7 @@ async def fetch_and_save_ohlcv(
 
 
 async def process_ticker(
-    ticker: str, last_date: str | None = None, target_api_calls: int = 5
+    ticker: str, last_date: int | None = None, target_api_calls: int = 5
 ):
     """
     한 종목에 대해 여러 번 API를 호출하여 충분한 과거 데이터(예: 5번 호출 시 최대 500영업일)를 수집.
@@ -73,7 +73,7 @@ async def process_ticker(
         oldest_date_str = min(item.stck_bsop_date for item in valid_items)
 
         # [스마트 스케줄러] 우리가 가진 DB의 최신 날짜(last_date)와 겹치는 구간(이하)이 확보되면 즉시 과거 역추적 중단
-        if last_date and oldest_date_str <= last_date:
+        if last_date and int(oldest_date_str) <= last_date:
             break
 
         oldest_date = datetime.strptime(oldest_date_str, "%Y%m%d")
