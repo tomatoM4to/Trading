@@ -107,7 +107,8 @@ async def verify_daily_integrity_service(
             # 4. DB 데이터 조회
             query = f"SELECT date, open, high, low, close, volume, amount FROM daily_ohlcv WHERE ticker = ? AND date IN ({placeholders})"
             cursor.execute(query, [ticker] + date_list)
-            db_rows = {row["date"]: dict(row) for row in cursor.fetchall()}
+            # SQLite의 INTEGER를 문자열로 변환하여 API 응답(문자열)과 타입 일치
+            db_rows = {str(row["date"]): dict(row) for row in cursor.fetchall()}
 
             # 5. 데이터 비교
             match_count = 0

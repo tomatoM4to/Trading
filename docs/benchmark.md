@@ -1,7 +1,7 @@
 # 스크리너 벤치마크 및 부하 테스트 (Screener Benchmark)
 
 ## 1. 개요
-`scripts/benchmark_screener.py` 스크립트는 Trading Server의 핵심인 **스크리너 엔진(Screener Engine)**의 실시간 성능과 부하 처리 능력을 측정하기 위해 작성되었습니다. 
+`scripts/benchmark_screener.py` 스크립트는 Trading Server의 핵심인 **스크리너 엔진(Screener Engine)**의 실시간 성능과 부하 처리 능력을 측정하기 위해 작성되었습니다.
 
 본 벤치마크는 2,400개 전 종목을 대상으로 복잡한 SQLite Push-down 윈도우 함수 쿼리(이평선 정배열, 크로스, 밀집 등)가 디스크 I/O 및 1GB RAM 환경(Oracle Cloud)에서 어느 정도의 지연 시간(Latency)을 발생시키는지 추적합니다.
 
@@ -24,7 +24,7 @@
 
 ## 3. 실행 방법
 
-벤치마크 스크립트는 `uv` 환경 또는 파이썬 가상환경에서 `requests` 라이브러리를 통해 동작합니다. 
+벤치마크 스크립트는 `uv` 환경 또는 파이썬 가상환경에서 `requests` 라이브러리를 통해 동작합니다.
 스크리너 API가 SSE(Server-Sent Events) 스트림으로 동작하므로 스크립트는 스트림을 구독하여 `{"type": "complete"}` 이벤트가 도착할 때까지의 소요 시간을 측정합니다.
 
 ```bash
@@ -42,4 +42,41 @@ uv run python scripts/benchmark_screener.py --host http://localhost:8000
 ### 주요 결과 해석
 - **0.1초 미만의 비정상적인 종료**: 과거 발생했던 "Short-circuit" 버그와 같이 잘못된 쿼리로 인해 결과가 즉시 빈 값으로 반환된 경우입니다. (ADR-021 적용으로 현재는 해결 및 400 에러 처리됨)
 - **정상적인 연산 소요 시간**: SQLite의 풀스캔 및 윈도우 함수 처리로 인해 시나리오의 무거움에 따라 수 초에서 ~30초 가량이 정상적인 소요 시간입니다.
-- **최적화 지표 (In-Memory 도입 후)**: 향후 SQLite 데이터를 인메모리(`:memory:`)로 띄우거나 `temp_store=MEMORY` 프라그마를 적용하는 등의 최적화 작업이 진행된 후, 이 벤치마크의 소요 시간(Duration)이 얼마나 획기적으로 줄어드는지 비교하는 절대적인 기준점이 됩니다.
+- **최적화 지표 (In-Memory 도입 완료)**: 물리 디스크 I/O 병목을 제거하기 위해 `file::memory:?cache=shared` 기반의 100% In-Memory DB 아키텍처가 전면 적용되었습니다 (참고: ADR-022). 본 벤치마크를 통해 디스크 기반 연산 대비 소요 시간(Duration)이 수백 밀리초 수준으로 얼마나 획기적으로 줄어들었는지 직접 확인할 수 있습니다.
+
+## 5. 벤치마크 결과 히스토리
+서버(Oracle Cloud 1GB RAM)와 로컬 환경에서 점진적인 아키텍처 최적화를 수행하며 측정한 결과들입니다.
+
+### ☁️ 운영 서버 (Oracle Cloud, 1GB RAM)
+**1. 초기 최적화 전 (버그 포함)**
+*참고: 1, 2차 테스트는 `Short-circuit` 버그로 인해 쿼리가 무시되어 0초로 기록된 결과입니다.*
+- [screener_benchmark_20260804_145625.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260804_145625.csv)
+- [screener_benchmark_20260804_150706.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260804_150706.csv)
+
+**2. 버그 해결 후 정밀 테스트**
+*참고: 정상적으로 DB 쿼리가 수행되었으나, 디스크 I/O 병목으로 인해 쿼리 소요 시간이 수십 초에 달했습니다.*
+- [screener_benchmark_20260804_152738.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260804_152738.csv)
+
+**3. In-Memory DB 최적화 도입**
+*최적화 성과: Disk I/O를 0으로 만들어 전반적인 속도는 올랐으나, 분봉 데이터 윈도우 함수 처리 시 1GB RAM 환경의 연산 한계로 인해 60초 타임아웃(Timeout)이 다수 발생했습니다.*
+- [screener_benchmark_20260804_222615.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260804_222615.csv)
+- [screener_benchmark_20260804_224407.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260804_224407.csv)
+
+### 💻 로컬 머신 (High Spec)
+*참고: 로컬 환경은 리소스가 넉넉하여 무거운 쿼리도 타임아웃이 발생하지 않았으며, 순수한 알고리즘 및 쿼리 최적화의 효과를 정밀하게 추적하기 위해 사용되었습니다.*
+
+**1. In-Memory DB 기준 측정 (로컬 베이스라인)**
+*참고: 디스크 병목은 없으나, 무거운 분봉 스트레스 쿼리(Heavy 2)의 경우 로컬에서도 **약 16.5초** 이상 소요되었습니다.*
+- [screener_benchmark_20260804_215830.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260804_215830.csv)
+
+**2. AST 파이프라인 최적화 (휴리스틱 Cost 정렬)**
+*최적화 성과: 가벼운 API 기반 필터를 우선 실행(Cost 0)하도록 재정렬하여 초기 종목 파티션을 크게 축소했습니다.*
+- [screener_benchmark_20260805_212946.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260805_212946.csv)
+
+**3. 동적 Ticker 푸시다운 (Push-down)**
+*최적화 성과: 앞서 축소된 종목 리스트 30개를 SQL 쿼리에 직접 주입(`WHERE ticker IN (...)`)하여 풀스캔을 차단했습니다. 그 결과 로컬 기준 **16.50초 → 2.43초(약 85% 단축)**라는 압도적인 성능 향상을 달성했습니다.*
+- [screener_benchmark_20260805_215007.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260805_215007.csv)
+
+**4. 단방향 윈도우 쿼리 최적화 (Reverse Windowing)**
+*최적화 성과: `date ASC`로 재정렬하던 SQLite 오버헤드를 제거하고, 단일 방향(`rn ASC`) 윈도우 처리를 구현했습니다. 로컬 기준 절대 시간 차이는 **2.43초 → 2.42초**로 미미하지만, 1GB 서버 환경에서의 치명적인 메모리 스왑(Bi-directional Sorting 오버헤드)을 원천 차단하는 아키텍처적 완성도를 달성했습니다.*
+- [screener_benchmark_20260805_215923.csv](file:///C:/Users/qweas/projects/Trading/docs/benchmark-result/screener_benchmark_20260805_215923.csv)

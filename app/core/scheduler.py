@@ -139,6 +139,9 @@ class SystemScheduler:
             logger.sched("Starting scheduled stock codes refresh...")
             await asyncio.to_thread(init_stock_codes_db)
             logger.sched("Scheduled stock codes refresh completed.")
+            
+            from core.database import sync_memory_to_disk
+            await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -193,6 +196,9 @@ class SystemScheduler:
             logger.sched(
                 f"OHLCV GC completed. Deleted daily: {daily_del} rows, minute: {minute_del} rows."
             )
+            
+            from core.database import sync_memory_to_disk
+            await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -207,6 +213,9 @@ class SystemScheduler:
             await run_daily_ohlcv_scheduler("KOSPI")
             await run_daily_ohlcv_scheduler("KOSDAQ")
             logger.sched("Scheduled daily OHLCV update completed.")
+            
+            from core.database import sync_memory_to_disk
+            await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:

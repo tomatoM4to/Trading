@@ -59,11 +59,16 @@
 
 ## 6. 핵심 코드 패턴 (Patterns)
 - **In-Memory Zero-Latency 튜닝 (Memory & STRICT)**: 물리 디스크의 I/O 병목을 제거하기 위해 서버 부팅 시 DB를 `file::memory:?cache=shared`로 100% 로드하며, 익명 메모리 DB가 휘발되지 않도록 전역 `_keepalive_conn`을 유지한다. RAM 낭비 방지를 위해 모든 테이블은 `WITHOUT ROWID, STRICT` 속성을 갖추고 `date` 및 `time` 데이터는 `INTEGER`로 극한 압축한다. 임시 연산 역시 `PRAGMA temp_store = MEMORY`로 강제한다. (참고: `ADR-022`)
+- **SQLite Connection Lifecycle 및 파일 락 방어**: 파이썬의 `with sqlite3.connect(...)`는 트랜잭션만 관리할 뿐 커넥션을 닫아주지 않으므로 파일 잠금(WinError 32)을 유발할 수 있다. 백그라운드 워커 등에서 단독으로 DB에 연결할 때는 **반드시 `try...finally: conn.close()` 패턴을 명시적으로 사용**해야 한다. 단, API 엔드포인트는 `get_db()` 의존성을 통해 프레임워크 단에서 안전하게 종료된다. (참고: `ADR-023`)
+- **STRICT INTEGER 타입 캐스팅**: `STRICT` 테이블의 `INTEGER` 컬럼(예: 날짜, 시간)을 쿼리하여 파이썬 딕셔너리로 만들 때, KIS API의 문자열 응답과 비교하려면 반드시 `str(row["date"])` 처럼 명시적 캐스팅을 거쳐야만 탐색 누락(Missing)을 방지할 수 있다. (참고: `ADR-023`)
 - **SQLite Push-down & 엄격한 윈도우 연산**: 이평선 정배열 및 크로스 등 기술적 지표 필터링은 파이썬으로 데이터를 가져오지 않고, SQLite Window Function(`LAG`, `ROW_NUMBER` 등)과 CTE를 활용해 DB 엔진 단에서 조건을 판별(Push-down)하고 결과 Ticker만 반환하도록 작성한다. 또한 데이터(캔들) 개수가 부족할 때 발생하는 수학적 왜곡(False Positive)을 막기 위해 윈도우 연산 시 반드시 `CASE WHEN COUNT(...) = N` 조건으로 데이터 무결성을 검증하고 실패 시 `NULL`을 리턴해야 한다. (참고: `ADR-016`)
-- **Push-down 파라미터 엄격 검증 (Anti-Short-Circuit)**: SQLite 쿼리 옵티마이저가 `1=0`과 같은 더미 조건으로 인해 전체 무거운 CTE 연산을 건너뛰는(Short-circuit) 버그를 막기 위해, 스크리너 필터 핸들러는 SQL 문자열을 조립하기 전 반드시 모든 파라미터를 엄격하게 검증(Validation)하고 잘못된 값일 경우 예외(ValueError)를 던져야 한다. (참고: `ADR-021`)
-- **스크리너 Pre-filter 최적화 (파티션 축소)**: 윈도우 함수 등 무거운 연산을 수행하는 스크리너 쿼리는 연산 전 반드시 `WITH active_tickers` CTE를 사용하여 `stock_codes` 테이블에서 매매 불가 종목(거래정지 `is_halted=1`, 관리종목 `is_admin_issue=1`)을 선행 필터링(Pre-filter)한 후 메인 테이블과 조인해야 한다. 이를 통해 윈도우 함수가 불필요한 종목까지 파티셔닝하는 리소스 낭비를 원천 차단한다. (참고: `ADR-020`)
+- **Ticker 집합 주입 (Dynamic Push-down)**: 파이프라인 최적화의 극대화를 위해, `_execute_filter` 실행 시 이전 체인에서 살아남은 `chain_set`을 SQLite 쿼리의 `active_tickers` CTE에 `WHERE ticker IN (...)` 구문으로 동적 주입하여, 무거운 윈도우 함수가 불필요한 종목 2,400개 전체를 풀스캔하는 오버헤드를 99% 차단한다. (참고: `ADR-025`)
+- **단방향 윈도우 정렬 (Reverse Windowing)**: 1GB RAM 클라우드 환경에서의 치명적인 메모리 스파이크(Bi-directional Sorting)를 방지하기 위해, 이평선 등 윈도우 합산 시 `date ASC`로 재정렬하지 않고 초기 추출된 내림차순 번호표인 `rn ASC`를 그대로 유지한 채 `ROWS BETWEEN CURRENT ROW AND N FOLLOWING` 로 역방향 윈도우를 씌워 정렬 연산을 0회로 만든다. (참고: `ADR-025`)
+- **Push-down 파라미터 엄격 검증 (Anti-Short-Circuit)**: SQLite 쿼리 옵티마이저가 `1=0`과 같은 더미 조건으로 인해 전체 무거운 CTE 연산을 건너뛰는(Short-circuit) 버그를 막기 위해, 스크리너 필터 핸들러는 SQL 문자열 조립 전 반드시 모든 파라미터를 엄격하게 검증하고 예외를 던져야 한다. (참고: `ADR-021`)
+- **스크리너 Pre-filter 최적화 (파티션 축소)**: 윈도우 함수 등 무거운 연산을 수행하는 스크리너 쿼리는 연산 전 반드시 `WITH active_tickers` CTE를 사용하여 매매 불가 종목을 선행 필터링한 후 조인한다.
 - **스칼라 서브쿼리를 이용한 데이터 확장 (Enrichment)**: 스크리너 등에서 소수의 결과 집합(Result Set)에 대한 추가 지표(최신 현재가, 거래대금 등)를 가져올 때는 무거운 JOIN이나 파이썬 맵핑 대신, SELECT 절 내부에 `ORDER BY date DESC LIMIT 1` 형태의 스칼라 서브쿼리를 작성하여 B-Tree 인덱스 스캔을 유도한다. (참고: `ADR-017`)
 - **실시간 점진적 피드백 (Progressive Feedback)**: 다중 교집합(스크리너 등)과 같이 연산이 길어져 1분 이상 걸릴 수 있는 무거운 파이프라인 실행 시, 클라이언트 타임아웃 방지 및 좋은 UX를 위해 별도의 비동기 큐 없이 FastAPI의 `StreamingResponse(text/event-stream)`를 활용한 SSE 방식을 최우선 적용한다. (참고: `ADR-018`)
+- **스크리너 AST 파이프라인 최적화 (Big O Heuristics)**: 클라이언트의 조건식(AST)은 서버 메모리 보호 및 성능 극대화를 위해 반드시 `OR` 기준으로 분기(Split) 후, 각 `AND` 체인 내부를 **휴리스틱 비용(Cost)** 기준으로 정렬(가벼운 필터 우선)하여 실행한다. 중간 교집합 연산 시 `Set`이 빈약해지면 후속 연산을 즉시 중단(Short-circuit)해야 한다. API 호출 필터(외국인/기관 매수 등)는 결과 셋을 30개로 극적으로 줄여주므로 항상 Cost 0 (최우선순위)으로 취급한다. (참고: `ADR-024`)
 - **로깅 규칙**: 스케줄러 및 백그라운드 작업의 로깅은 표준 `info` 대신 반드시 커스텀 레벨인 `logger.sched(...)`를 사용하여 로그 가독성을 유지한다.
 - **API 래퍼 사용**: KIS OpenAPI 호출 결과는 반드시 사전에 정의된 `APIResp` 객체(내부 `DotDict` 포함)로 래핑하여 파이썬 점 표기법(Dot-notation)으로 일관성 있게 다룬다.
 - **UI/UX 원칙 (Smart Defaults)**: 강제 제약(Systematic restriction)보다는 사용자의 편의를 돕는 '스마트 디폴트' 패턴을 지향한다. (예: 타임프레임 전환 시 관련 이평선 자동 On/Off)

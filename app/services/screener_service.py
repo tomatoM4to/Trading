@@ -15,75 +15,164 @@ class ScreenerEngine:
             "inst_net_buy_rank": self._handle_inst_net_buy_rank,
         }
 
-    async def run_pipeline(self, request: ScreenerRequest) -> set[str]:
+    def _estimate_cost(self, filter_node: FilterNode) -> float:
         """
-        주어진 AST(플랫 리스트) 파이프라인을 순회하며 Set 연산을 수행합니다.
+        필터의 파라미터를 기반으로 시간복잡도(Big O) O(T * K * L) 형태의 휴리스틱 비용을 계산합니다.
         """
-        if not request.filters:
-            return set()
-
-        # 1. 첫 번째 필터 실행하여 초기 기준 집합 생성
-        first_filter = request.filters[0]
-        current_set = await self._execute_filter(first_filter)
-
-        # 2. 두 번째 필터부터 순차적으로 파이프라인(AND/OR) 연산 수행
-        for i in range(1, len(request.filters)):
-            next_filter = request.filters[i]
-            operation = request.operations[i - 1]  # 현재 필터와 직전 결과 사이의 연산자
-
-            # 다음 필터 실행 (지연 평가 - 나중에 최적화 시 이 시점에서 AND 연산일 경우 current_set을 넘겨 쿼리를 제한할 수도 있음)
-            next_set = await self._execute_filter(next_filter)
-
-            # 집합 연산
-            if operation == "AND":
-                current_set = current_set & next_set
-            elif operation == "OR":
-                current_set = current_set | next_set
-
-        return current_set
-
-    async def run_pipeline_stream(self, request: ScreenerRequest):
-        """
-        주어진 AST(플랫 리스트) 파이프라인을 순회하며 Set 연산을 수행하고 SSE 이벤트를 스트리밍합니다.
-        """
-        import json
-        if not request.filters:
-            yield f"data: {json.dumps({'type': 'complete', 'items': []})}\n\n"
-            return
-
-        # 1. 첫 번째 필터 실행
-        first_filter = request.filters[0]
-        current_set = await self._execute_filter(first_filter)
+        f_type = filter_node.type
+        params = filter_node.params
         
-        # 첫 번째 필터 종료 이벤트 yield
-        yield f"data: {json.dumps({'type': 'progress', 'filter_id': first_filter.id, 'remaining': len(current_set)})}\n\n"
+        # 1. API 기반 필터는 비용 0으로 가장 우선 실행
+        if f_type in ("foreign_net_buy_rank", "inst_net_buy_rank"):
+            return 0.0
+            
+        # 2. DB 기반 필터의 K, L 도출
+        windows = {
+            "ma_daily_5": 4, "ma_daily_20": 19, "ma_daily_60": 59, "ma_daily_120": 119,
+            "ma5": 4, "ma10": 9, "ma20": 19, "ma60": 59, "ma120": 119,
+        }
+        
+        lines = params.get("lines", [])
+        short_line = params.get("short_line")
+        long_line = params.get("long_line")
+        
+        # Timeframe weight (분봉은 테이블이 훨씬 크므로 3.0의 페널티)
+        is_daily = True
+        if lines:
+            is_daily = any("daily" in line for line in lines)
+        elif short_line or long_line:
+            is_daily = "daily" in str(short_line) or "daily" in str(long_line)
+            
+        table_weight = 1.0 if is_daily else 3.0
+        
+        # K (required_rows) 와 L 계산
+        if f_type == "ma_alignment" or f_type == "ma_convergence_consolidation":
+            max_window = max((windows.get(line, 0) for line in lines), default=0)
+            duration = params.get("duration", 1)
+            k = max_window + duration + 1
+            l = len(lines) if lines else 1
+            return float(k * l * table_weight)
+            
+        elif f_type == "ma_cross":
+            w_short = windows.get(short_line, 0)
+            w_long = windows.get(long_line, 0)
+            max_window = max(w_short, w_long)
+            within = params.get("within", 1)
+            k = max_window + within + 2
+            l = 2
+            return float(k * l * table_weight)
+            
+        elif f_type == "ma_convergence_point":
+            max_window = max((windows.get(line, 0) for line in lines), default=0)
+            within = params.get("within", 1)
+            k = max_window + within + 1
+            l = len(lines) if lines else 1
+            return float(k * l * table_weight)
+            
+        return 9999.0
 
-        # 2. 두 번째 필터부터 순차 연산
+    def _optimize_pipeline(self, request: ScreenerRequest) -> list[list[FilterNode]]:
+        """
+        요청을 OR 기준으로 여러 AND 체인으로 분할하고,
+        각 체인 내의 필터들을 _estimate_cost 비용 오름차순으로 정렬하여 반환합니다.
+        """
+        if not request.filters:
+            return []
+            
+        chains = []
+        current_chain = [request.filters[0]]
+        
         for i in range(1, len(request.filters)):
             next_filter = request.filters[i]
             operation = request.operations[i - 1]
+            
+            if operation == "OR":
+                chains.append(current_chain)
+                current_chain = [next_filter]
+            else:
+                current_chain.append(next_filter)
+                
+        if current_chain:
+            chains.append(current_chain)
+            
+        # 각 AND 체인 내부 정렬 (비용 오름차순)
+        for chain in chains:
+            chain.sort(key=lambda f: self._estimate_cost(f))
+            
+        return chains
 
-            next_set = await self._execute_filter(next_filter)
-
-            if operation == "AND":
-                current_set = current_set & next_set
-            elif operation == "OR":
-                current_set = current_set | next_set
-
-            yield f"data: {json.dumps({'type': 'progress', 'filter_id': next_filter.id, 'remaining': len(current_set)})}\n\n"
-
-        # 3. 최종 결과 확장(Enrichment)
-        items = self.get_ticker_names(current_set)
+    async def run_pipeline(self, request: ScreenerRequest) -> set[str]:
+        """
+        주어진 AST 파이프라인을 최적화(분할 및 정렬)한 후 Set 연산을 수행합니다.
+        """
+        chains = self._optimize_pipeline(request)
+        if not chains:
+            return set()
+            
+        final_set = set()
         
-        # 최종 완료 이벤트 yield
+        for chain in chains:
+            chain_set = None
+            
+            for filter_node in chain:
+                if chain_set is not None and not chain_set:
+                    break
+                    
+                result_set = await self._execute_filter(filter_node, current_tickers=chain_set)
+                
+                if chain_set is None:
+                    chain_set = result_set
+                else:
+                    chain_set = chain_set & result_set
+                    
+            if chain_set:
+                final_set = final_set | chain_set
+                
+        return final_set
+
+    async def run_pipeline_stream(self, request: ScreenerRequest):
+        """
+        최적화된 순서대로 파이프라인을 실행하며 SSE 이벤트를 스트리밍합니다.
+        """
+        import json
+        chains = self._optimize_pipeline(request)
+        if not chains:
+            yield f"data: {json.dumps({'type': 'complete', 'items': []})}\n\n"
+            return
+            
+        final_set = set()
+        
+        for chain in chains:
+            chain_set = None
+            
+            for filter_node in chain:
+                if chain_set is not None and not chain_set:
+                    yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': 0})}\n\n"
+                    continue
+                    
+                yield f"data: {json.dumps({'type': 'start', 'filter_id': filter_node.id})}\n\n"
+                
+                result_set = await self._execute_filter(filter_node, current_tickers=chain_set)
+                
+                if chain_set is None:
+                    chain_set = result_set
+                else:
+                    chain_set = chain_set & result_set
+                    
+                yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': len(chain_set)})}\n\n"
+                
+            if chain_set:
+                final_set = final_set | chain_set
+                
+        items = self.get_ticker_names(final_set)
         yield f"data: {json.dumps({'type': 'complete', 'items': items})}\n\n"
 
-    async def _execute_filter(self, filter_node: FilterNode) -> set[str]:
+    async def _execute_filter(self, filter_node: FilterNode, current_tickers: set[str] | None = None) -> set[str]:
         """단일 필터 모듈을 호출하여 티커 집합(Set)을 반환합니다."""
         handler = self.filter_handlers.get(filter_node.type)
         if not handler:
             raise ValueError(f"지원하지 않는 필터 타입입니다: {filter_node.type}")
-        return await handler(filter_node.params)
+        return await handler(filter_node.params, current_tickers)
 
     def get_ticker_names(self, tickers: set[str]) -> list:
         """티커 Set을 받아 이름과 각종 지표가 포함된 딕셔너리 리스트로 변환합니다."""
@@ -144,7 +233,7 @@ class ScreenerEngine:
     # 개별 필터 모듈 로직 (Task 3 에서 구체화 예정)
     # ==========================================
 
-    async def _handle_ma_alignment(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_ma_alignment(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """다중 이평선 정배열(상태) 판별 필터 (SQLite Push-down)"""
         lines = params.get("lines", [])
         duration = params.get("duration", 1)
@@ -182,8 +271,8 @@ class ScreenerEngine:
         for ma_line in lines:
             w = windows.get(ma_line, 0)
             ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
                 f"ELSE NULL END as {ma_line}"
             )
         
@@ -194,10 +283,17 @@ class ScreenerEngine:
 
         ma_select_str = ",\n                ".join(ma_selects)
 
+        ticker_cond = ""
+        if current_tickers is not None:
+            if not current_tickers:
+                return set()
+            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+            ticker_cond = f"AND ticker IN ({placeholders})"
+
         query = f"""
         WITH active_tickers AS (
             SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0
+            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
         ),
         recent_data AS (
             SELECT * FROM (
@@ -238,7 +334,7 @@ class ScreenerEngine:
             cursor.close()
             conn.close()
 
-    async def _handle_ma_cross(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_ma_cross(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """이평선 크로스(이벤트) 판별 필터 (SQLite Push-down)"""
         short_line = params.get("short_line")
         long_line = params.get("long_line")
@@ -275,8 +371,8 @@ class ScreenerEngine:
         ma_selects = []
         for ma_line, w in [(short_line, w_short), (long_line, w_long)]:
             ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
                 f"ELSE NULL END as {ma_line}"
             )
         
@@ -288,10 +384,17 @@ class ScreenerEngine:
         elif direction == "dead":
             cross_cond = f"(prev_{short_line} >= prev_{long_line} AND curr_{short_line} < curr_{long_line})"
 
+        ticker_cond = ""
+        if current_tickers is not None:
+            if not current_tickers:
+                return set()
+            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+            ticker_cond = f"AND ticker IN ({placeholders})"
+
         query = f"""
         WITH active_tickers AS (
             SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0
+            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
         ),
         recent_data AS (
             SELECT * FROM (
@@ -312,8 +415,8 @@ class ScreenerEngine:
                 *,
                 {short_line} as curr_{short_line},
                 {long_line} as curr_{long_line},
-                LAG({short_line}, 1) OVER(PARTITION BY ticker ORDER BY {order_clause}) as prev_{short_line},
-                LAG({long_line}, 1) OVER(PARTITION BY ticker ORDER BY {order_clause}) as prev_{long_line}
+                LEAD({short_line}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{short_line},
+                LEAD({long_line}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{long_line}
             FROM calc_ma
         )
         SELECT ticker
@@ -339,7 +442,7 @@ class ScreenerEngine:
             cursor.close()
             conn.close()
 
-    async def _handle_ma_convergence_consolidation(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_ma_convergence_consolidation(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """수렴 횡보(상태 유지) 판별 필터"""
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
@@ -369,8 +472,8 @@ class ScreenerEngine:
         for ma_line in lines:
             w = windows.get(ma_line, 0)
             ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
                 f"ELSE NULL END as {ma_line}"
             )
         
@@ -382,10 +485,17 @@ class ScreenerEngine:
         convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
+        ticker_cond = ""
+        if current_tickers is not None:
+            if not current_tickers:
+                return set()
+            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+            ticker_cond = f"AND ticker IN ({placeholders})"
+
         query = f"""
         WITH active_tickers AS (
             SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0
+            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
         ),
         recent_data AS (
             SELECT * FROM (
@@ -427,7 +537,7 @@ class ScreenerEngine:
             cursor.close()
             conn.close()
 
-    async def _handle_ma_convergence_point(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_ma_convergence_point(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """수렴 지점(이벤트 발생) 판별 필터"""
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
@@ -457,8 +567,8 @@ class ScreenerEngine:
         for ma_line in lines:
             w = windows.get(ma_line, 0)
             ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
                 f"ELSE NULL END as {ma_line}"
             )
         
@@ -470,10 +580,17 @@ class ScreenerEngine:
         convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
+        ticker_cond = ""
+        if current_tickers is not None:
+            if not current_tickers:
+                return set()
+            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+            ticker_cond = f"AND ticker IN ({placeholders})"
+
         query = f"""
         WITH active_tickers AS (
             SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0
+            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
         ),
         recent_data AS (
             SELECT * FROM (
@@ -560,15 +677,21 @@ class ScreenerEngine:
                     
             return set(unique_tickers[:limit])
 
-    async def _handle_foreign_net_buy_rank(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_foreign_net_buy_rank(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """외국인 순매수 상위 필터"""
         limit = params.get("limit", 30)
-        return await self._fetch_investor_rank(etc_cls_code="1", limit=limit)
+        res = await self._fetch_investor_rank(etc_cls_code="1", limit=limit)
+        if current_tickers is not None:
+            return res & current_tickers
+        return res
 
-    async def _handle_inst_net_buy_rank(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_inst_net_buy_rank(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """기관 순매수 상위 필터"""
         limit = params.get("limit", 30)
-        return await self._fetch_investor_rank(etc_cls_code="2", limit=limit)
+        res = await self._fetch_investor_rank(etc_cls_code="2", limit=limit)
+        if current_tickers is not None:
+            return res & current_tickers
+        return res
 
 
 screener_engine = ScreenerEngine()
