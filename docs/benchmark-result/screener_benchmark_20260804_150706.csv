@@ -1,0 +1,11 @@
+Scenario Name,Duration (s),Tickers Found,Status
+Light 1 (Daily Cross),29.924,0,Success
+Light 2 (Minute Cross),0.106,0,Success
+Light 3 (Daily Alignment),12.248,102,Success
+Light 4 (Minute Convergence Point),60.046,0,Error: 504 Server Error: Gateway Time-out for url: https://168.107.55.31.nip.io/api/screener/run
+Light 5 (Daily Alignment + Foreign Buy Rank),16.196,3,Success
+Heavy 1 (Daily Deep Window),30.719,0,Success
+Heavy 2 (Minute Stress Test),60.131,0,Error: 504 Server Error: Gateway Time-out for url: https://168.107.55.31.nip.io/api/screener/run
+Heavy 3 (Mixed Timeframes Combo),60.096,0,Error: 504 Server Error: Gateway Time-out for url: https://168.107.55.31.nip.io/api/screener/run
+Heavy 4 (Extreme Window Functions),60.071,0,Error: 504 Server Error: Gateway Time-out for url: https://168.107.55.31.nip.io/api/screener/run
+Heavy 5 (Full Minute DB Scan),60.1,0,Error: 504 Server Error: Gateway Time-out for url: https://168.107.55.31.nip.io/api/screener/run
