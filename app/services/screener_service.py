@@ -269,8 +269,8 @@ class ScreenerEngine:
         for ma_line in lines:
             w = windows.get(ma_line, 0)
             ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
                 f"ELSE NULL END as {ma_line}"
             )
         
@@ -369,8 +369,8 @@ class ScreenerEngine:
         ma_selects = []
         for ma_line, w in [(short_line, w_short), (long_line, w_long)]:
             ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
                 f"ELSE NULL END as {ma_line}"
             )
         
@@ -413,8 +413,8 @@ class ScreenerEngine:
                 *,
                 {short_line} as curr_{short_line},
                 {long_line} as curr_{long_line},
-                LAG({short_line}, 1) OVER(PARTITION BY ticker ORDER BY {order_clause}) as prev_{short_line},
-                LAG({long_line}, 1) OVER(PARTITION BY ticker ORDER BY {order_clause}) as prev_{long_line}
+                LEAD({short_line}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{short_line},
+                LEAD({long_line}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{long_line}
             FROM calc_ma
         )
         SELECT ticker
@@ -470,8 +470,8 @@ class ScreenerEngine:
         for ma_line in lines:
             w = windows.get(ma_line, 0)
             ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
                 f"ELSE NULL END as {ma_line}"
             )
         
@@ -565,8 +565,8 @@ class ScreenerEngine:
         for ma_line in lines:
             w = windows.get(ma_line, 0)
             ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY {order_clause} ROWS BETWEEN {w} PRECEDING AND CURRENT ROW) "
+                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
+                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
                 f"ELSE NULL END as {ma_line}"
             )
         

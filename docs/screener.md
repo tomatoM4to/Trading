@@ -134,6 +134,8 @@ N개의 이평선을 파라미터로 받아, **지정된 순서대로 크기 비
 - **파라미터 엄격 검증 (Anti-Short-Circuit)**: 잘못된 파라미터(예: `direction="up"`)가 주입되어 SQLite 옵티마이저가 `1=0` 조건으로 쿼리 전체를 건너뛰는(Short-circuit) 것을 막기 위해, 모든 파라미터는 SQL 문자열 조립 전에 엄격히 검증되며 실패 시 즉시 예외(ValueError)를 반환합니다. (참고: `ADR-021`)
 - **사전 필터링 최적화 (Pre-filter)**: 윈도우 함수의 연산 파티션 수를 줄여 성능을 극대화하기 위해, 쿼리 최상단에 항상 `active_tickers` CTE를 두어 거래정지(`is_halted=1`) 및 관리종목(`is_admin_issue=1`)을 선행 제외한 후 메인 테이블과 조인합니다. (참고: `ADR-020`)
 - **일봉/분봉 동시 지원**: 요청 파라미터(`lines`)에 `ma_daily_20`이 들어오면 `daily_ohlcv`를, `ma20`이 들어오면 `minute_ohlcv`를 동적으로 스캔하여 매매 전략(단기/장기)에 모두 대응합니다.
+- **동적 Ticker 푸시다운 (Dynamic Push-down)**: 이전 체인의 가벼운 API 필터 등에서 종목 수가 축소된 경우, 해당 `Set`의 종목 코드들을 쿼리의 `active_tickers` CTE 내부에 `WHERE ticker IN (...)` 구문으로 직접 찔러 넣어 스캔 범위를 99% 이상 증발시킵니다. (참고: `ADR-025`)
+- **단방향 윈도우 정렬 (Reverse Windowing)**: 1GB RAM 환경의 인메모리 정렬 오버헤드(Bi-directional Sorting)를 제거하기 위해, 최신 캔들 추출에 쓰인 내림차순 식별자(`rn ASC`)를 그대로 유지한 채 `ROWS BETWEEN CURRENT ROW AND N FOLLOWING` 역방향 윈도우로 이평선을 연산하여 DB 내부의 재정렬을 0회로 만듭니다. (참고: `ADR-025`)
 
 ### 3.3 쿼리 옵티마이저와 Short-circuit 연산
 기존에는 리스트의 순서대로 순차 실행했으나, 이제는 무거운 윈도우 함수(분봉)와 가벼운 필터(API 랭킹)가 섞여 있을 때 발생하는 60초 타임아웃 병목을 해결하기 위해 **휴리스틱 쿼리 옵티마이저**가 도입되었습니다.
