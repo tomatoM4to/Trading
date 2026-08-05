@@ -118,7 +118,7 @@ class ScreenerEngine:
                 if chain_set is not None and not chain_set:
                     break
                     
-                result_set = await self._execute_filter(filter_node)
+                result_set = await self._execute_filter(filter_node, current_tickers=chain_set)
                 
                 if chain_set is None:
                     chain_set = result_set
@@ -150,7 +150,7 @@ class ScreenerEngine:
                     yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': 0})}\n\n"
                     continue
                     
-                result_set = await self._execute_filter(filter_node)
+                result_set = await self._execute_filter(filter_node, current_tickers=chain_set)
                 
                 if chain_set is None:
                     chain_set = result_set
@@ -165,12 +165,12 @@ class ScreenerEngine:
         items = self.get_ticker_names(final_set)
         yield f"data: {json.dumps({'type': 'complete', 'items': items})}\n\n"
 
-    async def _execute_filter(self, filter_node: FilterNode) -> set[str]:
+    async def _execute_filter(self, filter_node: FilterNode, current_tickers: set[str] | None = None) -> set[str]:
         """단일 필터 모듈을 호출하여 티커 집합(Set)을 반환합니다."""
         handler = self.filter_handlers.get(filter_node.type)
         if not handler:
             raise ValueError(f"지원하지 않는 필터 타입입니다: {filter_node.type}")
-        return await handler(filter_node.params)
+        return await handler(filter_node.params, current_tickers)
 
     def get_ticker_names(self, tickers: set[str]) -> list:
         """티커 Set을 받아 이름과 각종 지표가 포함된 딕셔너리 리스트로 변환합니다."""
@@ -231,7 +231,7 @@ class ScreenerEngine:
     # 개별 필터 모듈 로직 (Task 3 에서 구체화 예정)
     # ==========================================
 
-    async def _handle_ma_alignment(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_ma_alignment(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """다중 이평선 정배열(상태) 판별 필터 (SQLite Push-down)"""
         lines = params.get("lines", [])
         duration = params.get("duration", 1)
@@ -281,10 +281,17 @@ class ScreenerEngine:
 
         ma_select_str = ",\n                ".join(ma_selects)
 
+        ticker_cond = ""
+        if current_tickers is not None:
+            if not current_tickers:
+                return set()
+            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+            ticker_cond = f"AND ticker IN ({placeholders})"
+
         query = f"""
         WITH active_tickers AS (
             SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0
+            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
         ),
         recent_data AS (
             SELECT * FROM (
@@ -325,7 +332,7 @@ class ScreenerEngine:
             cursor.close()
             conn.close()
 
-    async def _handle_ma_cross(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_ma_cross(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """이평선 크로스(이벤트) 판별 필터 (SQLite Push-down)"""
         short_line = params.get("short_line")
         long_line = params.get("long_line")
@@ -375,10 +382,17 @@ class ScreenerEngine:
         elif direction == "dead":
             cross_cond = f"(prev_{short_line} >= prev_{long_line} AND curr_{short_line} < curr_{long_line})"
 
+        ticker_cond = ""
+        if current_tickers is not None:
+            if not current_tickers:
+                return set()
+            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+            ticker_cond = f"AND ticker IN ({placeholders})"
+
         query = f"""
         WITH active_tickers AS (
             SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0
+            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
         ),
         recent_data AS (
             SELECT * FROM (
@@ -426,7 +440,7 @@ class ScreenerEngine:
             cursor.close()
             conn.close()
 
-    async def _handle_ma_convergence_consolidation(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_ma_convergence_consolidation(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """수렴 횡보(상태 유지) 판별 필터"""
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
@@ -469,10 +483,17 @@ class ScreenerEngine:
         convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
+        ticker_cond = ""
+        if current_tickers is not None:
+            if not current_tickers:
+                return set()
+            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+            ticker_cond = f"AND ticker IN ({placeholders})"
+
         query = f"""
         WITH active_tickers AS (
             SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0
+            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
         ),
         recent_data AS (
             SELECT * FROM (
@@ -514,7 +535,7 @@ class ScreenerEngine:
             cursor.close()
             conn.close()
 
-    async def _handle_ma_convergence_point(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_ma_convergence_point(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """수렴 지점(이벤트 발생) 판별 필터"""
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
@@ -557,10 +578,17 @@ class ScreenerEngine:
         convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
+        ticker_cond = ""
+        if current_tickers is not None:
+            if not current_tickers:
+                return set()
+            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+            ticker_cond = f"AND ticker IN ({placeholders})"
+
         query = f"""
         WITH active_tickers AS (
             SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0
+            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
         ),
         recent_data AS (
             SELECT * FROM (
@@ -647,15 +675,21 @@ class ScreenerEngine:
                     
             return set(unique_tickers[:limit])
 
-    async def _handle_foreign_net_buy_rank(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_foreign_net_buy_rank(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """외국인 순매수 상위 필터"""
         limit = params.get("limit", 30)
-        return await self._fetch_investor_rank(etc_cls_code="1", limit=limit)
+        res = await self._fetch_investor_rank(etc_cls_code="1", limit=limit)
+        if current_tickers is not None:
+            return res & current_tickers
+        return res
 
-    async def _handle_inst_net_buy_rank(self, params: dict[str, Any]) -> set[str]:
+    async def _handle_inst_net_buy_rank(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
         """기관 순매수 상위 필터"""
         limit = params.get("limit", 30)
-        return await self._fetch_investor_rank(etc_cls_code="2", limit=limit)
+        res = await self._fetch_investor_rank(etc_cls_code="2", limit=limit)
+        if current_tickers is not None:
+            return res & current_tickers
+        return res
 
 
 screener_engine = ScreenerEngine()
