@@ -89,8 +89,8 @@ async def get_chart_data(
             rows = cursor.fetchall()
 
             for r in rows:
-                date_str = r["date"]
-                time_str = r["time"]
+                date_str = str(r["date"])
+                time_str = str(r["time"]).zfill(6)
                 formatted_time = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} {time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
 
                 data_points.append(
@@ -163,8 +163,8 @@ async def get_chart_data(
             rows = cursor.fetchall()
 
             for r in rows:
-                date_str = r["date"]
-                time_str = r["time"]
+                date_str = str(r["date"])
+                time_str = str(r["time"]).zfill(6)
                 formatted_time = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} {time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
 
                 data_points.append(
