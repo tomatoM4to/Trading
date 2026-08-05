@@ -4,9 +4,12 @@ import sqlite3
 from collections.abc import Generator
 from pathlib import Path
 
-# 동적 DB 라우팅을 위한 ContextVar (테스트 API 요청 시에만 test_trading.db로 덮어쓰기 위해 사용)
+# 동적 DB 라우팅을 위한 ContextVar
 test_db_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "test_db_var", default=None
+)
+test_mem_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "test_mem_var", default=None
 )
 
 
@@ -19,6 +22,10 @@ def get_sqlite_db_path() -> Path | str:
     """Return the SQLite DB file path from env or default location.
     만약 contextvars에 test_db_var가 세팅되어 있다면 해당 경로를 최우선으로 반환합니다.
     """
+    test_mem = test_mem_var.get()
+    if test_mem:
+        return test_mem
+
     test_db = test_db_var.get()
     if test_db:
         return Path(test_db).expanduser().resolve()
@@ -36,7 +43,7 @@ def connect_sqlite() -> sqlite3.Connection:
     """Create a SQLite connection configured for row access by column name."""
     db_path = get_sqlite_db_path()
     
-    if isinstance(db_path, str) and db_path.startswith("file::memory:"):
+    if isinstance(db_path, str) and ("memory" in db_path):
         conn = sqlite3.connect(db_path, uri=True, check_same_thread=False)
     else:
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,3 +159,48 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
         yield conn
     finally:
         conn.close()
+
+
+def sync_memory_to_disk(mem_conn: sqlite3.Connection | None = None) -> None:
+    """인메모리 DB의 상태를 물리 디스크 파일로 안전하게 백업합니다."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Fallback in case custom sched level is not initialized
+    log_func = getattr(logger, "sched", logger.info)
+    
+    log_func("[DB SYNC] Starting memory to disk synchronization...")
+    
+    # 물리적 DB 경로 확보 (테스트 환경 최우선 라우팅)
+    test_db = test_db_var.get()
+    if test_db:
+        disk_path = Path(test_db).expanduser().resolve()
+    else:
+        configured = os.getenv("SQLITE_DB_PATH")
+        if configured:
+            disk_path = Path(configured).expanduser().resolve()
+        else:
+            disk_path = Path(__file__).resolve().parents[2] / "data" / "trading.db"
+        
+    try:
+        global _keepalive_conn
+        source_conn = mem_conn if mem_conn is not None else _keepalive_conn
+        if source_conn is None:
+            logger.error("[DB SYNC] source_conn is None. In-memory DB might not be initialized.")
+            return
+
+        disk_path.parent.mkdir(parents=True, exist_ok=True)
+        # WAL 모드 적용된 디스크 커넥션 열기
+        disk_conn = sqlite3.connect(disk_path, check_same_thread=False)
+        try:
+            disk_conn.execute("PRAGMA journal_mode = WAL")
+            disk_conn.execute("PRAGMA synchronous = NORMAL")
+            # 256 페이지(약 1MB)씩 복사하며, 복사 간 0.001초 쉬어서 DB Lock을 최소화
+            source_conn.backup(disk_conn, pages=256, sleep=0.001)
+        finally:
+            disk_conn.close()
+            
+        log_func(f"[DB SYNC] Memory perfectly synced to disk: {disk_path.name}")
+    except Exception as e:
+        logger.error(f"[DB SYNC] Failed to sync to disk: {e}")
+

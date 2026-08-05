@@ -4,7 +4,8 @@
 
 ## 0. 핵심 설계 철학
 - **SQLite 기반 Zero-Latency 아키텍처 (In-Memory)**: 모든 트레이딩 전략(돌파 매매 등)과 핫리스트 추출은 KIS API에 실시간으로 의존하지 않고, 오직 로컬 SQLite DB만을 조회하여 연산 지연을 0에 가깝게 만듭니다. 이를 위해 부팅 시 물리적 디스크 DB를 **Shared In-Memory DB**로 100% 로드하며, 커넥션 단절 시 메모리 DB가 삭제(GC)되는 것을 막기 위해 `_keepalive_conn`을 띄워둡니다. 모든 임시 연산(`temp_store`)도 메모리에서 수행합니다 (참고: ADR-022).
-- **디스크 I/O 최적화 (WAL & 압축)**: 디스크 스토리지 용량을 절약하고 In-Memory 로딩 시간을 단축하기 위해 모든 테이블은 `WITHOUT ROWID, STRICT` 구조를 띕니다. 불필요한 자동 인덱스를 제거하고, `date`와 `time`을 `INTEGER`로 강제 형변환하여 램(RAM)과 디스크 사용량을 극한으로 압축했습니다.
+- **SQLite Connection Lifecycle 및 락 방어**: 디스크 백업이나 갱신 중 파일 락(WinError 32)을 방지하기 위해, 파이썬의 `sqlite3` context manager(`with sqlite3.connect`)에 의존하지 않고 반드시 명시적인 `try...finally: conn.close()`로 커넥션을 닫습니다 (참고: ADR-023).
+- **디스크 I/O 최적화 (WAL & 압축)**: 디스크 스토리지 용량을 절약하고 In-Memory 로딩 시간을 단축하기 위해 모든 테이블은 `WITHOUT ROWID, STRICT` 구조를 띕니다. 자동 인덱스를 제거하고, `date`와 `time`을 `INTEGER`로 강제 형변환하여 램(RAM)과 디스크 사용량을 극한으로 압축했습니다. STRICT 테이블의 INTEGER를 파이썬 딕셔너리로 조회할 때는 반드시 `str()` 캐스팅을 통해 무결성 검증을 수행합니다 (참고: ADR-023).
 - **자가 치유 (Self-Healing)**: DB 파일이 없거나 손상되었을 경우, 서버 부팅 시점에 즉시 테이블과 인덱스를 재생성하고 데이터 복구를 시작할 수 있는 구조를 지향합니다.
 
 ---

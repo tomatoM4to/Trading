@@ -59,6 +59,8 @@
 
 ## 6. 핵심 코드 패턴 (Patterns)
 - **In-Memory Zero-Latency 튜닝 (Memory & STRICT)**: 물리 디스크의 I/O 병목을 제거하기 위해 서버 부팅 시 DB를 `file::memory:?cache=shared`로 100% 로드하며, 익명 메모리 DB가 휘발되지 않도록 전역 `_keepalive_conn`을 유지한다. RAM 낭비 방지를 위해 모든 테이블은 `WITHOUT ROWID, STRICT` 속성을 갖추고 `date` 및 `time` 데이터는 `INTEGER`로 극한 압축한다. 임시 연산 역시 `PRAGMA temp_store = MEMORY`로 강제한다. (참고: `ADR-022`)
+- **SQLite Connection Lifecycle 및 파일 락 방어**: 파이썬의 `with sqlite3.connect(...)`는 트랜잭션만 관리할 뿐 커넥션을 닫아주지 않으므로 파일 잠금(WinError 32)을 유발할 수 있다. 백그라운드 워커 등에서 단독으로 DB에 연결할 때는 **반드시 `try...finally: conn.close()` 패턴을 명시적으로 사용**해야 한다. 단, API 엔드포인트는 `get_db()` 의존성을 통해 프레임워크 단에서 안전하게 종료된다. (참고: `ADR-023`)
+- **STRICT INTEGER 타입 캐스팅**: `STRICT` 테이블의 `INTEGER` 컬럼(예: 날짜, 시간)을 쿼리하여 파이썬 딕셔너리로 만들 때, KIS API의 문자열 응답과 비교하려면 반드시 `str(row["date"])` 처럼 명시적 캐스팅을 거쳐야만 탐색 누락(Missing)을 방지할 수 있다. (참고: `ADR-023`)
 - **SQLite Push-down & 엄격한 윈도우 연산**: 이평선 정배열 및 크로스 등 기술적 지표 필터링은 파이썬으로 데이터를 가져오지 않고, SQLite Window Function(`LAG`, `ROW_NUMBER` 등)과 CTE를 활용해 DB 엔진 단에서 조건을 판별(Push-down)하고 결과 Ticker만 반환하도록 작성한다. 또한 데이터(캔들) 개수가 부족할 때 발생하는 수학적 왜곡(False Positive)을 막기 위해 윈도우 연산 시 반드시 `CASE WHEN COUNT(...) = N` 조건으로 데이터 무결성을 검증하고 실패 시 `NULL`을 리턴해야 한다. (참고: `ADR-016`)
 - **Push-down 파라미터 엄격 검증 (Anti-Short-Circuit)**: SQLite 쿼리 옵티마이저가 `1=0`과 같은 더미 조건으로 인해 전체 무거운 CTE 연산을 건너뛰는(Short-circuit) 버그를 막기 위해, 스크리너 필터 핸들러는 SQL 문자열을 조립하기 전 반드시 모든 파라미터를 엄격하게 검증(Validation)하고 잘못된 값일 경우 예외(ValueError)를 던져야 한다. (참고: `ADR-021`)
 - **스크리너 Pre-filter 최적화 (파티션 축소)**: 윈도우 함수 등 무거운 연산을 수행하는 스크리너 쿼리는 연산 전 반드시 `WITH active_tickers` CTE를 사용하여 `stock_codes` 테이블에서 매매 불가 종목(거래정지 `is_halted=1`, 관리종목 `is_admin_issue=1`)을 선행 필터링(Pre-filter)한 후 메인 테이블과 조인해야 한다. 이를 통해 윈도우 함수가 불필요한 종목까지 파티셔닝하는 리소스 낭비를 원천 차단한다. (참고: `ADR-020`)

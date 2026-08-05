@@ -1,7 +1,12 @@
 import os
 from pathlib import Path
 
-from core.database import connect_sqlite, init_sqlite_connection, test_db_var
+from core.database import (
+    connect_sqlite,
+    test_db_var,
+    test_mem_var,
+    sync_memory_to_disk,
+)
 from fastapi import HTTPException
 from services.admin_daily_service import verify_daily_integrity_service
 from services.admin_minute_service import verify_minute_integrity_service
@@ -23,22 +28,44 @@ async def test_daily_scheduler_integration_service():
     finally:
         conn_real.close()
 
-    # 2. ContextVar 설정하여 이후 모든 DB 연결이 test_trading.db를 바라보게 함
+    # 2. ContextVar 설정하여 테스트 환경 완벽 격리 (Memory + Disk)
     test_db_path = str(Path(__file__).resolve().parents[2] / "data" / "test_trading.db")
+    test_mem_uri = "file:test_daily_mem?mode=memory&cache=shared"
 
-    # 테스트 전 기존 test_trading.db 삭제하여 깨끗한 환경 유지
-    if os.path.exists(test_db_path):
-        os.remove(test_db_path)
+    for ext in ["", "-wal", "-shm"]:
+        target = test_db_path + ext
+        if os.path.exists(target):
+            try:
+                os.remove(target)
+            except Exception:
+                pass
 
-    token = test_db_var.set(test_db_path)
+    token_db = test_db_var.set(test_db_path)
+    token_mem = test_mem_var.set(test_mem_uri)
+    test_keepalive_conn = None
     try:
-        # 스키마 초기화 (test_db_var 컨텍스트 내이므로 test_trading.db에 생성됨)
-        init_sqlite_connection()
-
-        # 3. 추출한 3개 종목을 test_trading.db의 stock_codes에 이식
+        # 이 커넥션은 테스트가 끝날 때까지 닫지 않아 메모리 DB의 증발을 막습니다.
+        test_keepalive_conn = connect_sqlite()
+        
+        # 3. 테스트용 인메모리 DB 스키마 생성 및 종목 이식
         conn_test = connect_sqlite()
         try:
             cursor_test = conn_test.cursor()
+            cursor_test.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_ohlcv (
+                    ticker TEXT NOT NULL,
+                    date INTEGER NOT NULL,
+                    open INTEGER NOT NULL,
+                    high INTEGER NOT NULL,
+                    low INTEGER NOT NULL,
+                    close INTEGER NOT NULL,
+                    volume INTEGER NOT NULL,
+                    amount INTEGER NOT NULL,
+                    PRIMARY KEY (ticker, date)
+                ) WITHOUT ROWID, STRICT
+                """
+            )
             cursor_test.execute(
                 """
                 CREATE TABLE IF NOT EXISTS stock_codes (
@@ -97,7 +124,7 @@ async def test_daily_scheduler_integration_service():
         finally:
             conn_test.close()
 
-        # 스케줄러 재구동하여 빈 공간(Gap) 복구
+        # 스케줄러 재구동하여 빈 공간(Gap) 복구 (조기 종료 백필)
         await run_daily_ohlcv_scheduler(market="KOSPI")
         await run_daily_ohlcv_scheduler(market="KOSDAQ")
 
@@ -111,7 +138,27 @@ async def test_daily_scheduler_integration_service():
         finally:
             conn_test.close()
 
-        # 6. [검증 3] API 데이터와 1:1 무결성 비교
+        # 6. [검증 3] 메모리 -> 물리 디스크 Sync 및 디스크 파일 검증
+        conn_test = connect_sqlite()
+        try:
+            sync_memory_to_disk(mem_conn=conn_test)
+        finally:
+            conn_test.close()
+
+        # 인메모리 라우팅을 잠시 해제하여, 물리 디스크 커넥션 확보
+        test_mem_var.set(None)
+        conn_disk = connect_sqlite()
+        try:
+            cursor_disk = conn_disk.cursor()
+            cursor_disk.execute(
+                "SELECT ticker, COUNT(*) FROM daily_ohlcv GROUP BY ticker"
+            )
+            results["step3_disk_sync_counts"] = dict(cursor_disk.fetchall())
+        finally:
+            conn_disk.close()
+            test_mem_var.set(test_mem_uri)
+
+        # 7. [검증 4] API 데이터와 1:1 무결성 비교
         kospi_count = sum(1 for s in target_stocks if s["market"] == "KOSPI")
         kosdaq_count = sum(1 for s in target_stocks if s["market"] == "KOSDAQ")
 
@@ -125,13 +172,15 @@ async def test_daily_scheduler_integration_service():
                 sample_size=kosdaq_count, market="KOSDAQ"
             )
 
-        results["step3_integrity_verification"] = verify_results
+        results["step4_integrity_verification"] = verify_results
 
         return results
 
     finally:
-        # 컨텍스트 복원 (다른 API 호출에 영향을 주지 않음)
-        test_db_var.reset(token)
+        if test_keepalive_conn:
+            test_keepalive_conn.close()
+        test_db_var.reset(token_db)
+        test_mem_var.reset(token_mem)
 
 
 async def test_minute_scheduler_integration_service():
@@ -147,17 +196,43 @@ async def test_minute_scheduler_integration_service():
         conn_real.close()
 
     test_db_path = str(Path(__file__).resolve().parents[2] / "data" / "test_trading.db")
+    test_mem_uri = "file:test_minute_mem?mode=memory&cache=shared"
 
-    if os.path.exists(test_db_path):
-        os.remove(test_db_path)
+    for ext in ["", "-wal", "-shm"]:
+        target = test_db_path + ext
+        if os.path.exists(target):
+            try:
+                os.remove(target)
+            except Exception:
+                pass
 
-    token = test_db_var.set(test_db_path)
+    token_db = test_db_var.set(test_db_path)
+    token_mem = test_mem_var.set(test_mem_uri)
+    test_keepalive_conn = None
     try:
-        init_sqlite_connection()
-
+        # 이 커넥션은 테스트가 끝날 때까지 닫지 않아 메모리 DB의 증발을 막습니다.
+        test_keepalive_conn = connect_sqlite()
+        
+        # 스키마 초기화
         conn_test = connect_sqlite()
         try:
             cursor_test = conn_test.cursor()
+            cursor_test.execute(
+                """
+                CREATE TABLE IF NOT EXISTS minute_ohlcv (
+                    ticker TEXT NOT NULL,
+                    date INTEGER NOT NULL,
+                    time INTEGER NOT NULL,
+                    open INTEGER NOT NULL,
+                    high INTEGER NOT NULL,
+                    low INTEGER NOT NULL,
+                    close INTEGER NOT NULL,
+                    volume INTEGER NOT NULL,
+                    amount INTEGER,
+                    PRIMARY KEY (ticker, date, time)
+                ) WITHOUT ROWID, STRICT
+                """
+            )
             cursor_test.execute(
                 """
                 CREATE TABLE IF NOT EXISTS stock_codes (
@@ -232,7 +307,26 @@ async def test_minute_scheduler_integration_service():
         finally:
             conn_test.close()
 
-        # 6. [검증 3] API 데이터와 1:1 무결성 비교
+        # 6. [검증 3] 메모리 -> 물리 디스크 Sync 및 디스크 파일 검증
+        conn_test = connect_sqlite()
+        try:
+            sync_memory_to_disk(mem_conn=conn_test)
+        finally:
+            conn_test.close()
+
+        test_mem_var.set(None)
+        conn_disk = connect_sqlite()
+        try:
+            cursor_disk = conn_disk.cursor()
+            cursor_disk.execute(
+                "SELECT ticker, COUNT(*) FROM minute_ohlcv GROUP BY ticker"
+            )
+            results["step3_disk_sync_counts"] = dict(cursor_disk.fetchall())
+        finally:
+            conn_disk.close()
+            test_mem_var.set(test_mem_uri)
+
+        # 7. [검증 4] API 데이터와 1:1 무결성 비교
         kospi_count = sum(1 for s in target_stocks if s["market"] == "KOSPI")
         kosdaq_count = sum(1 for s in target_stocks if s["market"] == "KOSDAQ")
 
@@ -246,9 +340,12 @@ async def test_minute_scheduler_integration_service():
                 sample_size=kosdaq_count, market="KOSDAQ"
             )
 
-        results["step3_integrity_verification"] = verify_results
+        results["step4_integrity_verification"] = verify_results
 
         return results
 
     finally:
-        test_db_var.reset(token)
+        if test_keepalive_conn:
+            test_keepalive_conn.close()
+        test_db_var.reset(token_db)
+        test_mem_var.reset(token_mem)

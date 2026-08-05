@@ -81,8 +81,9 @@ async def verify_minute_integrity_service(sample_size: int = 10, market: str = "
             cursor.execute(query, params)
 
             # (date, time)을 키로 하는 딕셔너리로 변환하여 고속 탐색
+            # SQLite의 INTEGER를 문자열로 변환하여 API 응답(문자열)과 타입 일치
             db_rows = {
-                (row["date"], row["time"]): dict(row) for row in cursor.fetchall()
+                (str(row["date"]), str(row["time"]).zfill(6)): dict(row) for row in cursor.fetchall()
             }
 
             # 5. 데이터 1:1 검증
