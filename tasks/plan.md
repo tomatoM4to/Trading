@@ -1,24 +1,34 @@
-# Plan: Test Endpoint Upgrade for In-Memory Sync Pipeline
+# Plan: Screener Query Optimizer
 
-## 1. Major Components & Dependencies
-- `app/core/database.py`: `sync_memory_to_disk` 함수 리팩토링. (테스트 환경 라우팅 지원)
-- `app/services/admin_test_service.py`: 일봉 및 분봉 테스트 로직 전면 개편. (In-Memory 구동 및 백업 파이프라인 검증 추가)
+## 1. 개요 (Overview)
+`app/services/screener_service.py` 내의 `run_pipeline` 및 `run_pipeline_stream` 로직을 개편합니다.
+Flat List 형태의 스크리너 요청을 `OR` 기준으로 분기(Split)하여 여러 개의 `AND` 체인으로 만들고, 각 체인 내부의 필터들을 **휴리스틱 비용(Cost)** 순으로 정렬하여 DB 조회 부하를 최소화합니다.
 
-## 2. Implementation Order
-1. **Component 1 (Database Refactor)**: `app/core/database.py`의 `sync_memory_to_disk(mem_conn=None)` 함수에 인자를 추가하여, 테스트용 메모리 커넥션을 외부에서 주입받을 수 있게 합니다. 또한 `test_db_var`가 존재할 경우 물리 디스크 경로를 강제로 `test_trading.db`로 라우팅하도록 안전장치를 추가합니다.
-2. **Component 2 (Daily Test Upgrade)**: `app/services/admin_test_service.py`의 `test_daily_scheduler_integration_service`를 수정합니다.
-   - 테스트용 `file:test_mem...` 인메모리 DB 생성 및 스키마 로드
-   - 종목 3개 랜덤 추출 및 데이터 삭제(Slicing)로 갭(Gap) 생성
-   - 백필(Backfill) 스케줄러 실행
-   - `sync_memory_to_disk(test_mem_conn)` 호출
-   - 디스크 파일(`test_trading.db`)에 직접 쿼리를 날려 데이터가 성공적으로 백업되었는지 2차 무결성 검증
-3. **Component 3 (Minute Test Upgrade)**: 동일한 구조를 `test_minute_scheduler_integration_service`에도 적용합니다.
+## 2. 주요 컴포넌트 및 구현 순서
+1. **Cost Estimator 구현 (`_estimate_cost` 메서드)**
+   - API 기반 랭킹 필터(`foreign_net_buy_rank`, `inst_net_buy_rank`): Cost = `0` (가장 우선 실행). API 통신이지만 반환 셋이 30개 정도로 극히 작아 이후 DB 파티션 크기를 99% 줄여줌.
+   - DB 기반 필터(`ma_alignment`, `ma_cross` 등): 파라미터 기반 휴리스틱 공식 적용.
+     - `timeframe_weight`: 분봉(minute) = 10, 일봉(daily) = 1
+     - Cost = `len(lines) * duration(or within) * timeframe_weight`
 
-## 3. Risks & Mitigation
-- **Risk**: 테스트 실행 시 인메모리 DB 이름 충돌로 인해 운영 DB 데이터와 섞일 가능성.
-- **Mitigation**: 운영 환경의 `file::memory:?cache=shared` 대신 테스트 전용인 `file:test_daily_mem?mode=memory&cache=shared` 등 완전히 고유한 URI를 사용하여 물리적/논리적으로 완벽히 격리합니다.
-- **Risk**: `sync_memory_to_disk`가 테스트 디스크 경로를 인식하지 못하고 라이브 DB에 덮어쓸 위험.
-- **Mitigation**: `test_db_var.get()` 값을 최우선으로 리턴하는 방어 로직을 통해 근본적으로 차단합니다.
+2. **AST Splitter & Optimizer 구현 (`_optimize_pipeline` 메서드)**
+   - `request.filters`와 `request.operations`를 순회하며 `OR` 연산자를 기준으로 리스트를 쪼갬 (예: `[[A, B], [C, D]]`).
+   - 각 `AND` 체인 내부의 필터들을 위에서 만든 Cost를 기준으로 오름차순(가벼운 것부터) 정렬.
 
-## 4. Parallelism
-- Component 1을 먼저 수행한 뒤, Component 2와 3은 병렬적으로 작업할 수 있습니다.
+3. **엔진 실행부 개편 (`run_pipeline` / `run_pipeline_stream`)**
+   - 각 `AND` 체인을 순회하며 교집합(`&`)을 수행. 
+   - **중요(Short-circuit)**: 특정 `AND` 체인 실행 중 중간 결과 셋이 빈 집합(`set()`)이 되면, 남은 필터를 무시하고 즉시 종료.
+   - 모든 `AND` 체인의 결과 셋을 합집합(`|`) 연산으로 결합.
+   - `run_pipeline_stream`의 경우, 프론트엔드가 변경된 순서대로 `progress` 이벤트를 받을 수 있도록 `filter_id`와 누적 남은 개수를 스트리밍.
+
+## 3. 병렬 처리 vs 순차 처리
+- `OR` 체인 간의 실행은 병렬(asyncio.gather)로 처리할 수도 있으나, 먼저 안전한 순차(Sequential) 처리로 구현하여 1GB RAM 환경에서의 OOM 및 커넥션 풀 고갈 리스크를 방지합니다.
+
+## 4. 리스크 및 완화 (Mitigation)
+- **리스크**: 프론트엔드 UI 진행 상태 막대(Progress Bar)가 필터 재정렬로 인해 예상치 못한 순서로 튀는 현상.
+- **완화**: SSE 응답에 고유 `filter_id`를 보내고 있으므로 프론트엔드의 `FilterBlock` 컴포넌트 상태 업데이트 로직이 정상 작동할 것으로 기대됨 (하위 호환성 유지).
+
+## 5. 검증 체크포인트 (Verification)
+- [ ] 단일 `AND` 체인 테스트 (가장 가벼운 필터가 먼저 실행되는지 확인)
+- [ ] `OR` 연산자 분할 테스트 (두 개의 분리된 체인 결합 확인)
+- [ ] `run_pipeline_stream`에서 `progress` 이벤트가 재정렬된 순서대로 정상 방출되는지 확인
