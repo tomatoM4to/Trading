@@ -173,7 +173,6 @@ export function ScreenerBuilder() {
       
       const initialStatuses: Record<string, FilterStatus> = {};
       filters.forEach(f => initialStatuses[f.id] = "idle");
-      if (filters.length > 0) initialStatuses[filters[0].id] = "processing";
       setFilterStatuses(initialStatuses);
       setRemainingCount(null);
       setResults([]);
@@ -188,17 +187,10 @@ export function ScreenerBuilder() {
         signal: ctrl.signal,
         async onmessage(ev) {
           const data = JSON.parse(ev.data);
-          if (data.type === "progress") {
-            setFilterStatuses(prev => {
-              const next = { ...prev };
-              next[data.filter_id] = "done";
-              
-              const index = filters.findIndex(f => f.id === data.filter_id);
-              if (index >= 0 && index < filters.length - 1) {
-                 next[filters[index + 1].id] = "processing";
-              }
-              return next;
-            });
+          if (data.type === "start") {
+            setFilterStatuses(prev => ({ ...prev, [data.filter_id]: "processing" }));
+          } else if (data.type === "progress") {
+            setFilterStatuses(prev => ({ ...prev, [data.filter_id]: "done" }));
             setRemainingCount(data.remaining);
           } else if (data.type === "complete") {
             const mappedResults = (data.items || []).map((item: any) => ({

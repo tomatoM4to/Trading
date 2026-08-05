@@ -150,6 +150,8 @@ class ScreenerEngine:
                     yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': 0})}\n\n"
                     continue
                     
+                yield f"data: {json.dumps({'type': 'start', 'filter_id': filter_node.id})}\n\n"
+                
                 result_set = await self._execute_filter(filter_node, current_tickers=chain_set)
                 
                 if chain_set is None:
