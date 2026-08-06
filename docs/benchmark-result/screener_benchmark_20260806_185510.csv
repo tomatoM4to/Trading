@@ -1,0 +1,11 @@
+Scenario Name,Duration (s),Tickers Found,Status
+Light 1 (Daily Cross),11.394,519,Success
+Light 2 (Minute Cross),23.654,197,Success
+Light 3 (Daily Alignment),13.711,151,Success
+Light 4 (Minute Convergence Point),22.828,2368,Success
+Light 5 (Daily Alignment + Foreign Buy Rank),0.368,20,Success
+Heavy 1 (Daily Deep Window),0.494,0,Success
+Heavy 2 (Minute Stress Test),0.599,0,Success
+Heavy 3 (Mixed Timeframes Combo),0.641,0,Success
+Heavy 4 (Extreme Window Functions),0.38,0,Success
+Heavy 5 (Full Minute DB Scan),0.519,0,Success
