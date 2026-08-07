@@ -7,6 +7,15 @@ import { X, Settings2, Loader2, CheckCircle2 } from "lucide-react";
 
 export type FilterType = "ma_alignment" | "ma_cross" | "ma_convergence_consolidation" | "ma_convergence_point" | "foreign_net_buy_rank" | "inst_net_buy_rank";
 
+export const FILTER_LABELS: Record<FilterType, string> = {
+  ma_alignment: "이평선 정배열",
+  ma_cross: "이평선 크로스",
+  ma_convergence_consolidation: "이평선 수렴 횡보 (유지)",
+  ma_convergence_point: "이평선 수렴 지점 (이벤트)",
+  foreign_net_buy_rank: "외국인 순매수 상위 랭킹",
+  inst_net_buy_rank: "기관 순매수 상위 랭킹",
+};
+
 export type FilterStatus = "idle" | "processing" | "done";
 
 export interface FilterNodeState {
@@ -80,15 +89,17 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
           <label className="text-xs font-semibold text-muted-foreground mb-1 block">필터 종류 (Type)</label>
           <Select value={filter.type} onValueChange={handleTypeChange}>
             <SelectTrigger>
-              <SelectValue placeholder="필터 선택" />
+              <SelectValue placeholder="필터 선택">
+                {filter.type ? FILTER_LABELS[filter.type] : "필터 선택"}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ma_alignment">이평선 정배열</SelectItem>
-              <SelectItem value="ma_cross">이평선 크로스</SelectItem>
-              <SelectItem value="ma_convergence_consolidation">이평선 수렴 횡보 (유지)</SelectItem>
-              <SelectItem value="ma_convergence_point">이평선 수렴 지점 (이벤트)</SelectItem>
-              <SelectItem value="foreign_net_buy_rank">외국인 순매수 상위 랭킹</SelectItem>
-              <SelectItem value="inst_net_buy_rank">기관 순매수 상위 랭킹</SelectItem>
+              <SelectItem value="ma_alignment">{FILTER_LABELS.ma_alignment}</SelectItem>
+              <SelectItem value="ma_cross">{FILTER_LABELS.ma_cross}</SelectItem>
+              <SelectItem value="ma_convergence_consolidation">{FILTER_LABELS.ma_convergence_consolidation}</SelectItem>
+              <SelectItem value="ma_convergence_point">{FILTER_LABELS.ma_convergence_point}</SelectItem>
+              <SelectItem value="foreign_net_buy_rank">{FILTER_LABELS.foreign_net_buy_rank}</SelectItem>
+              <SelectItem value="inst_net_buy_rank">{FILTER_LABELS.inst_net_buy_rank}</SelectItem>
             </SelectContent>
           </Select>
         </div>
