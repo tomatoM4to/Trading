@@ -8,6 +8,7 @@ import { ChartModal } from "./ChartModal";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { Button } from "@/components/ui/button";
 import { Play, Plus } from "lucide-react";
+import { toast } from "sonner";
 
 // ID generator for client-side
 const generateId = () =>
@@ -110,7 +111,7 @@ export function ScreenerBuilder() {
     });
 
     if (invalidFilter) {
-      alert("유지 기간(duration) 또는 교차 기준일(within)은 1 이상의 숫자로 입력해주세요.");
+      toast.error("유지 기간(duration) 또는 교차 기준일(within)은 1 이상의 숫자로 입력해주세요.");
       return;
     }
 
@@ -205,6 +206,11 @@ export function ScreenerBuilder() {
             setResults(mappedResults);
             setIsLoading(false);
             ctrl.abort(); // Prevent auto-reconnect
+          } else if (data.type === "error") {
+            toast.error(data.message);
+            setIsLoading(false);
+            ctrl.abort(); // 스트림 강제 종료 (throw 에러로 인한 Next.js 오버레이 방지)
+            return;
           }
         },
         onerror(err) {
@@ -215,7 +221,7 @@ export function ScreenerBuilder() {
 
     } catch (error: unknown) {
       console.error("Failed to fetch screener results:", error);
-      alert((error as Error).message || "실행 중 오류가 발생했습니다.");
+      toast.error((error as Error).message || "실행 중 오류가 발생했습니다.");
       setIsLoading(false);
     }
   };

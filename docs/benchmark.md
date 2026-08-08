@@ -66,6 +66,10 @@ uv run python scripts/benchmark_screener.py --host http://localhost:8000
 *최적화 성과: 로컬에서 검증된 최적화 기법(AST Cost 정렬, 동적 Ticker 푸시다운, 단방향 윈도우 등)을 1GB RAM 운영 서버에 모두 적용 후 측정한 최종 결과입니다. 풀스캔이 발생하는 단순 시나리오(Light 1~4)는 11~23초 소요되나, 수급 필터나 복합 조건이 포함된 시나리오들(Light 5, Heavy 1~5)은 사전 파티션 축소(지연 평가) 및 Short-circuit 덕분에 **전부 0.6초 이내(기존 60초 타임아웃 대비 99% 이상 단축)**에 처리되는 극적인 성능 최적화를 달성했습니다.*
 - [screener_benchmark_20260806_185510.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260806_185510.csv)
 
+**5. 인메모리 MA 엔진 도입 전 (서버 베이스라인 재측정)**
+*참고: ADR-026(파이썬 MA 엔진) 도입 직전에 측정한 서버 성능입니다. 분봉 윈도우 풀스캔 연산(Light 2, Light 4) 시 여전히 약 28~30초의 지연 시간이 발생합니다.*
+- [screener_benchmark_20260808_213722.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_213722.csv)
+
 ### 💻 로컬 머신 (High Spec)
 *참고: 로컬 환경은 리소스가 넉넉하여 무거운 쿼리도 타임아웃이 발생하지 않았으며, 순수한 알고리즘 및 쿼리 최적화의 효과를 정밀하게 추적하기 위해 사용되었습니다.*
 
@@ -84,3 +88,11 @@ uv run python scripts/benchmark_screener.py --host http://localhost:8000
 **4. 단방향 윈도우 쿼리 최적화 (Reverse Windowing)**
 *최적화 성과: `date ASC`로 재정렬하던 SQLite 오버헤드를 제거하고, 단일 방향(`rn ASC`) 윈도우 처리를 구현했습니다. 로컬 기준 절대 시간 차이는 **2.43초 → 2.42초**로 미미하지만, 1GB 서버 환경에서의 치명적인 메모리 스왑(Bi-directional Sorting 오버헤드)을 원천 차단하는 아키텍처적 완성도를 달성했습니다.*
 - [screener_benchmark_20260805_215923.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260805_215923.csv)
+
+**5. 인메모리 MA 엔진 도입 전 (로컬 베이스라인 재측정)**
+*참고: ADR-026(파이썬 MA 엔진) 도입 직전에 측정한 로컬 성능입니다. 분봉 윈도우 풀스캔 시 약 2.9초가 소요됩니다.*
+- [screener_benchmark_20260808_215546.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_215546.csv)
+
+**6. 순수 파이썬 인메모리 MA 엔진 전면 적용 (ADR-026)**
+*최적화 성과: 무거운 SQLite 윈도우 함수 연산을 완전히 덜어내고, 파이썬 객체 기반의 O(1) 캐시와 전용 메모리 MA 테이블을 구축한 최종 벤치마크 결과입니다. 가장 무거운 분봉 윈도우 풀스캔 쿼리(Light 2, 4) 기준 **2.9초 → 1.4초(약 50% 단축)**로 극적인 성능 향상을 보였으며 물리 디스크 I/O를 원천 차단했습니다.*
+- [screener_benchmark_20260808_222427.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_222427.csv)

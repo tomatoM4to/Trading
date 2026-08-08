@@ -82,3 +82,12 @@
 | `inst_vol` | INTEGER | | 기관 순매수 수량 |
 | `inst_amt` | INTEGER | | 기관 순매수 대금 |
 
+---
+
+## 5. `daily_ma` 및 `minute_ma` (In-Memory 전용 테이블)
+물리 디스크 I/O 병목과 SQLite 윈도우 함수의 한계를 극복하기 위해, **앱 구동 시 램(RAM)에만 생성되는 전용 휘발성 테이블(`file:ma_db?mode=memory&cache=shared`)**입니다. (참고: ADR-026)
+
+- **특징**: 스크리너 필터링 시 무거운 윈도우 연산(`AVG OVER`)을 제거하고 오직 단순 스캔(`SELECT * FROM minute_ma`)만 수행하여 Zero-Latency를 달성하기 위해 사용됩니다.
+- **수화(Hydration)**: `MACalculator`(파이썬 `deque` 캐시 엔진)를 통해 디스크의 OHLCV가 연산된 후 실시간으로 Bulk Insert 됩니다.
+- **스키마 구조**: `ticker`, `date` (분봉은 `time` 추가)를 PK로 가지며, 사전에 합의된 이평선 컬럼들(`ma5`, `ma10`, `ma20`, `ma60`, `ma120`, `ma200`)을 `REAL` 타입으로 갖습니다.
+

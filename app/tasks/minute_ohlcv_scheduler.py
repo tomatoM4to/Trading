@@ -81,7 +81,7 @@ async def fetch_minute_data(
 async def process_ticker(
     ticker: str,
     last_datetime: str | None = None,
-    limit_days: int = 3,
+    limit_days: int = 14,
     max_steps: int = 15,
     priority: int = 7,
 ) -> tuple[bool, str | None]:
@@ -170,9 +170,35 @@ async def process_ticker(
         df_clean = df_clean.dropna(subset=["date", "time", "close"])
         if not df_clean.empty:
             success_any = True
+            
+            from core.database import connect_sqlite, connect_ma_db
+            from core.ma_calculator import ma_calculator
+            
+            # 연산 시계열 보장을 위해 시간순(ASC) 정렬
+            df_clean = df_clean.sort_values(by=["date", "time"], ascending=[True, True])
+            
+            records = df_clean.to_dict("records")
+            ma_records = []
+            
+            for row in records:
+                ma_calculator.add_minute_close(row["ticker"], row["close"])
+                ma = ma_calculator.get_minute_ma(row["ticker"])
+                ma_records.append({
+                    "ticker": row["ticker"],
+                    "date": row["date"],
+                    "time": row["time"],
+                    "ma5": ma["ma5"],
+                    "ma10": ma["ma10"],
+                    "ma20": ma["ma20"],
+                    "ma60": ma["ma60"],
+                    "ma120": ma["ma120"],
+                    "ma200": ma["ma200"],
+                })
+
             conn = connect_sqlite()
+            ma_conn = connect_ma_db()
             try:
-                records = df_clean.to_dict("records")
+                # 1. OHLCV -> 디스크 DB
                 cursor = conn.cursor()
                 insert_sql = """
                     INSERT OR REPLACE INTO minute_ohlcv (
@@ -183,10 +209,23 @@ async def process_ticker(
                 """
                 cursor.executemany(insert_sql, records)
                 conn.commit()
+                
+                # 2. MA -> 인메모리 DB
+                ma_cursor = ma_conn.cursor()
+                ma_insert_sql = """
+                    INSERT OR REPLACE INTO minute_ma (
+                        ticker, date, time, ma5, ma10, ma20, ma60, ma120, ma200
+                    ) VALUES (
+                        :ticker, :date, :time, :ma5, :ma10, :ma20, :ma60, :ma120, :ma200
+                    )
+                """
+                ma_cursor.executemany(ma_insert_sql, ma_records)
+                ma_conn.commit()
             except Exception as e:
                 logger.error(f"[{ticker}] DB Insert Error: {e}")
             finally:
                 conn.close()
+                ma_conn.close()
 
         # 중복이 감지되었다면 과거 데이터를 더 뒤질 필요가 없으므로 즉시 탈출
         if is_overlap:
