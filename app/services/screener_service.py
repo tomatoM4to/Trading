@@ -135,37 +135,40 @@ class ScreenerEngine:
         최적화된 순서대로 파이프라인을 실행하며 SSE 이벤트를 스트리밍합니다.
         """
         import json
-        chains = self._optimize_pipeline(request)
-        if not chains:
-            yield f"data: {json.dumps({'type': 'complete', 'items': []})}\n\n"
-            return
+        try:
+            chains = self._optimize_pipeline(request)
+            if not chains:
+                yield f"data: {json.dumps({'type': 'complete', 'items': []})}\n\n"
+                return
+                
+            final_set = set()
             
-        final_set = set()
-        
-        for chain in chains:
-            chain_set = None
-            
-            for filter_node in chain:
-                if chain_set is not None and not chain_set:
-                    yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': 0})}\n\n"
-                    continue
+            for chain in chains:
+                chain_set = None
+                
+                for filter_node in chain:
+                    if chain_set is not None and not chain_set:
+                        yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': 0})}\n\n"
+                        continue
+                        
+                    yield f"data: {json.dumps({'type': 'start', 'filter_id': filter_node.id})}\n\n"
                     
-                yield f"data: {json.dumps({'type': 'start', 'filter_id': filter_node.id})}\n\n"
-                
-                result_set = await self._execute_filter(filter_node, current_tickers=chain_set)
-                
-                if chain_set is None:
-                    chain_set = result_set
-                else:
-                    chain_set = chain_set & result_set
+                    result_set = await self._execute_filter(filter_node, current_tickers=chain_set)
                     
-                yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': len(chain_set)})}\n\n"
-                
-            if chain_set:
-                final_set = final_set | chain_set
-                
-        items = self.get_ticker_names(final_set)
-        yield f"data: {json.dumps({'type': 'complete', 'items': items})}\n\n"
+                    if chain_set is None:
+                        chain_set = result_set
+                    else:
+                        chain_set = chain_set & result_set
+                        
+                    yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': len(chain_set)})}\n\n"
+                    
+                if chain_set:
+                    final_set = final_set | chain_set
+                    
+            items = self.get_ticker_names(final_set)
+            yield f"data: {json.dumps({'type': 'complete', 'items': items})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     async def _execute_filter(self, filter_node: FilterNode, current_tickers: set[str] | None = None) -> set[str]:
         """단일 필터 모듈을 호출하여 티커 집합(Set)을 반환합니다."""
