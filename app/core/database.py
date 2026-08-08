@@ -17,6 +17,9 @@ _USE_IN_MEMORY = False
 _MEM_DB_URI = "file::memory:?cache=shared"
 _keepalive_conn = None  # in-memory DB가 초기화되지 않도록 프로세스 수명 동안 유지하는 커넥션
 
+_MA_MEM_DB_URI = "file:ma_db?mode=memory&cache=shared"
+_keepalive_ma_conn = None  # 이평선(MA) 전용 인메모리 커넥션
+
 
 def get_sqlite_db_path() -> Path | str:
     """Return the SQLite DB file path from env or default location.
@@ -63,7 +66,7 @@ def connect_sqlite() -> sqlite3.Connection:
 
 def init_sqlite_connection() -> None:
     """Validate SQLite connectivity at startup and create schema."""
-    global _USE_IN_MEMORY, _keepalive_conn
+    global _USE_IN_MEMORY, _keepalive_conn, _keepalive_ma_conn
     
     import logging
     logger = logging.getLogger(__name__)
@@ -78,6 +81,11 @@ def init_sqlite_connection() -> None:
     logger.info("Initializing in-memory shared database...")
     # 💡 in-memory DB가 GC에 의해 삭제되지 않도록 프로세스 수명 동안 커넥션을 유지합니다.
     _keepalive_conn = sqlite3.connect(_MEM_DB_URI, uri=True, check_same_thread=False)
+
+    logger.info("Initializing MA dedicated in-memory database...")
+    _keepalive_ma_conn = sqlite3.connect(_MA_MEM_DB_URI, uri=True, check_same_thread=False)
+    _keepalive_ma_conn.execute("PRAGMA temp_store = MEMORY")
+    _keepalive_ma_conn.row_factory = sqlite3.Row
 
     # 물리적 DB가 존재하면 in-memory DB로 데이터를 복사(Load)
     if disk_path.exists():
@@ -151,10 +159,62 @@ def init_sqlite_connection() -> None:
     finally:
         conn.close()
 
+    # MA 인메모리 DB 스키마 생성
+    ma_conn = connect_ma_db()
+    try:
+        ma_conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_ma (
+            ticker TEXT NOT NULL,
+            date INTEGER NOT NULL,
+            ma5 REAL,
+            ma10 REAL,
+            ma20 REAL,
+            ma60 REAL,
+            ma120 REAL,
+            ma200 REAL,
+            PRIMARY KEY (ticker, date)
+        ) WITHOUT ROWID, STRICT
+        """)
+        
+        ma_conn.execute("""
+        CREATE TABLE IF NOT EXISTS minute_ma (
+            ticker TEXT NOT NULL,
+            date INTEGER NOT NULL,
+            time INTEGER NOT NULL,
+            ma5 REAL,
+            ma10 REAL,
+            ma20 REAL,
+            ma60 REAL,
+            ma120 REAL,
+            ma200 REAL,
+            PRIMARY KEY (ticker, date, time)
+        ) WITHOUT ROWID, STRICT
+        """)
+        ma_conn.commit()
+    finally:
+        ma_conn.close()
+
 
 def get_db() -> Generator[sqlite3.Connection, None, None]:
     """FastAPI dependency that provides a SQLite connection per request."""
     conn = connect_sqlite()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def connect_ma_db() -> sqlite3.Connection:
+    """Create a connection to the MA-dedicated in-memory database."""
+    conn = sqlite3.connect(_MA_MEM_DB_URI, uri=True, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA temp_store = MEMORY")
+    return conn
+
+
+def get_ma_db() -> Generator[sqlite3.Connection, None, None]:
+    """FastAPI dependency for the MA in-memory database."""
+    conn = connect_ma_db()
     try:
         yield conn
     finally:

@@ -234,403 +234,217 @@ class ScreenerEngine:
     # ==========================================
 
     async def _handle_ma_alignment(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
-        """다중 이평선 정배열(상태) 판별 필터 (SQLite Push-down)"""
+        """다중 이평선 정배열 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
         duration = params.get("duration", 1)
-        if not lines or len(lines) < 2:
-            return set()
+        if not lines or len(lines) < 2: return set()
 
-        # 1. 이평선 윈도우 크기 맵핑
-        windows = {
-            "ma_daily_5": 4,
-            "ma_daily_20": 19,
-            "ma_daily_60": 59,
-            "ma_daily_120": 119,
-            "ma5": 4,
-            "ma10": 9,
-            "ma20": 19,
-            "ma60": 59,
-            "ma120": 119,
-        }
+        is_daily = any("daily" in l for l in lines)
+        table_name = "daily_ma" if is_daily else "minute_ma"
+        order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
-        is_daily = any("daily" in ma_line for ma_line in lines)
-        table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
-        order_clause = "date ASC" if is_daily else "date ASC, time ASC"
-        order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
+        # 컬럼명 매핑 (예: ma_daily_5 -> ma5)
+        mapped = [f"ma{l.split('_')[-1]}" if l.startswith("ma_daily_") else l for l in lines]
+        max_candles = 390 if not is_daily else 300
+        if duration > max_candles: raise ValueError(f"지정된 duration({duration})이 정책 최대치를 초과합니다.")
 
-        # 2. 파라미터 유효성 검사 (GC 방어)
-        max_candles = 200 if is_daily else 1950
-        max_window = max(windows.get(ma_line, 0) for ma_line in lines)
-        if duration > max_candles - max_window - 1:
-            raise ValueError(f"지정된 duration({duration})이 GC 보관 주기를 초과하여 쿼리할 수 없습니다.")
+        conds = [f"({mapped[i]} > {mapped[i+1]})" for i in range(len(mapped)-1)]
+        trend_select = f"CASE WHEN {' AND '.join(conds)} THEN 1 ELSE 0 END as is_aligned"
 
-        required_rows = max_window + duration + 1
-
-        # 3. SELECT 구문 동적 생성
-        ma_selects = []
-        for ma_line in lines:
-            w = windows.get(ma_line, 0)
-            ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
-                f"ELSE NULL END as {ma_line}"
-            )
-        
-        # 배열의 순서대로 크기 비교 (lines[0] > lines[1] > lines[2] ...)
-        alignment_conditions = [f"({lines[i]} > {lines[i+1]})" for i in range(len(lines) - 1)]
-        alignment_cond_str = " AND ".join(alignment_conditions)
-        trend_select = f"CASE WHEN {alignment_cond_str} THEN 1 ELSE 0 END as is_aligned"
-
-        ma_select_str = ",\n                ".join(ma_selects)
-
-        ticker_cond = ""
-        if current_tickers is not None:
-            if not current_tickers:
-                return set()
-            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
-            ticker_cond = f"AND ticker IN ({placeholders})"
+        from core.database import connect_sqlite, connect_ma_db
+        if current_tickers is None:
+            conn = connect_sqlite()
+            rows = conn.execute("SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0").fetchall()
+            current_tickers = {r["ticker"] for r in rows}
+            conn.close()
+            
+        if not current_tickers: return set()
+        placeholders = ", ".join(f"'{t}'" for t in current_tickers)
 
         query = f"""
-        WITH active_tickers AS (
-            SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
-        ),
-        recent_data AS (
+        WITH recent_ma AS (
             SELECT * FROM (
-                SELECT d.*,
-                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name} d
-                JOIN active_tickers a ON d.ticker = a.ticker
-            ) WHERE rn <= {required_rows}
-        ),
-        calc_ma AS (
-            SELECT
-                *,
-                {ma_select_str}
-            FROM recent_data
+                SELECT m.*, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
+                FROM {table_name} m
+                WHERE ticker IN ({placeholders})
+            ) WHERE rn <= {duration}
         ),
         trend AS (
-            SELECT
-                *,
-                {trend_select}
-            FROM calc_ma
+            SELECT *, {trend_select} FROM recent_ma
+            WHERE {' AND '.join(f'{l} IS NOT NULL' for l in mapped)}
         )
-        SELECT ticker
-        FROM trend
-        WHERE rn <= {duration}
-        GROUP BY ticker
-        HAVING SUM(is_aligned) = {duration};
+        SELECT ticker FROM trend
+        GROUP BY ticker HAVING SUM(is_aligned) = {duration};
         """
-
-        from core.database import connect_sqlite
-
-        conn = connect_sqlite()
-        cursor = conn.cursor()
+        ma_conn = connect_ma_db()
         try:
-            cursor.execute(query)
-            rows = cursor.fetchall()
-            return {r[0] for r in rows}
+            return {r[0] for r in ma_conn.execute(query).fetchall()}
         finally:
-            cursor.close()
-            conn.close()
+            ma_conn.close()
 
     async def _handle_ma_cross(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
-        """이평선 크로스(이벤트) 판별 필터 (SQLite Push-down)"""
+        """이평선 크로스 판별 필터 (In-Memory MA 조회)"""
         short_line = params.get("short_line")
         long_line = params.get("long_line")
         within = params.get("within", 1)
-        direction = params.get("direction", "golden") # "golden" or "dead"
-
-        if direction not in ("golden", "dead"):
-            raise ValueError(f"지원하지 않는 direction입니다: {direction}")
-
-        if not short_line or not long_line:
-            return set()
-            
-        windows = {
-            "ma_daily_5": 4, "ma_daily_20": 19, "ma_daily_60": 59, "ma_daily_120": 119,
-            "ma5": 4, "ma10": 9, "ma20": 19, "ma60": 59, "ma120": 119,
-        }
+        direction = params.get("direction", "golden")
+        if direction not in ("golden", "dead") or not short_line or not long_line: return set()
 
         is_daily = "daily" in short_line or "daily" in long_line
-        table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
-        order_clause = "date ASC" if is_daily else "date ASC, time ASC"
-        order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
+        table_name = "daily_ma" if is_daily else "minute_ma"
+        order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
-        # GC 방어 유효성 검사
-        max_candles = 200 if is_daily else 1950
-        w_short = windows.get(short_line, 0)
-        w_long = windows.get(long_line, 0)
-        max_window = max(w_short, w_long)
-        
-        if within > max_candles - max_window - 1:
-            raise ValueError(f"지정된 within({within})이 GC 보관 주기를 초과합니다.")
+        s_col = f"ma{short_line.split('_')[-1]}" if short_line.startswith("ma_daily_") else short_line
+        l_col = f"ma{long_line.split('_')[-1]}" if long_line.startswith("ma_daily_") else long_line
 
-        required_rows = max_window + within + 2  # +2 for LAG
+        max_candles = 390 if not is_daily else 300
+        if within > max_candles: raise ValueError("within 값이 정책 최대치를 초과합니다.")
 
-        ma_selects = []
-        for ma_line, w in [(short_line, w_short), (long_line, w_long)]:
-            ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
-                f"ELSE NULL END as {ma_line}"
-            )
-        
-        ma_select_str = ",\n                ".join(ma_selects)
-        
-        cross_cond = "1=0"
         if direction == "golden":
-            cross_cond = f"(prev_{short_line} <= prev_{long_line} AND curr_{short_line} > curr_{long_line})"
-        elif direction == "dead":
-            cross_cond = f"(prev_{short_line} >= prev_{long_line} AND curr_{short_line} < curr_{long_line})"
+            cross_cond = f"(prev_{s_col} <= prev_{l_col} AND curr_{s_col} > curr_{l_col})"
+        else:
+            cross_cond = f"(prev_{s_col} >= prev_{l_col} AND curr_{s_col} < curr_{l_col})"
 
-        ticker_cond = ""
-        if current_tickers is not None:
-            if not current_tickers:
-                return set()
-            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
-            ticker_cond = f"AND ticker IN ({placeholders})"
+        from core.database import connect_sqlite, connect_ma_db
+        if current_tickers is None:
+            conn = connect_sqlite()
+            rows = conn.execute("SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0").fetchall()
+            current_tickers = {r["ticker"] for r in rows}
+            conn.close()
+            
+        if not current_tickers: return set()
+        placeholders = ", ".join(f"'{t}'" for t in current_tickers)
 
         query = f"""
-        WITH active_tickers AS (
-            SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
-        ),
-        recent_data AS (
+        WITH recent_ma AS (
             SELECT * FROM (
-                SELECT d.*,
-                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name} d
-                JOIN active_tickers a ON d.ticker = a.ticker
-            ) WHERE rn <= {required_rows}
-        ),
-        calc_ma AS (
-            SELECT
-                *,
-                {ma_select_str}
-            FROM recent_data
+                SELECT m.*, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
+                FROM {table_name} m
+                WHERE ticker IN ({placeholders})
+            ) WHERE rn <= {within + 1}
         ),
         lagged_ma AS (
-            SELECT
-                *,
-                {short_line} as curr_{short_line},
-                {long_line} as curr_{long_line},
-                LEAD({short_line}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{short_line},
-                LEAD({long_line}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{long_line}
-            FROM calc_ma
+            SELECT *,
+                   {s_col} as curr_{s_col}, {l_col} as curr_{l_col},
+                   LEAD({s_col}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{s_col},
+                   LEAD({l_col}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{l_col}
+            FROM recent_ma
         )
-        SELECT ticker
-        FROM lagged_ma
-        WHERE rn <= {within}
-          AND curr_{short_line} IS NOT NULL
-          AND prev_{short_line} IS NOT NULL
-          AND curr_{long_line} IS NOT NULL
-          AND prev_{long_line} IS NOT NULL
+        SELECT ticker FROM lagged_ma
+        WHERE rn <= {within} 
+          AND curr_{s_col} IS NOT NULL AND prev_{s_col} IS NOT NULL 
+          AND curr_{l_col} IS NOT NULL AND prev_{l_col} IS NOT NULL
           AND {cross_cond}
         GROUP BY ticker;
         """
-
-        from core.database import connect_sqlite
-
-        conn = connect_sqlite()
-        cursor = conn.cursor()
+        ma_conn = connect_ma_db()
         try:
-            cursor.execute(query)
-            rows = cursor.fetchall()
-            return {r[0] for r in rows}
+            return {r[0] for r in ma_conn.execute(query).fetchall()}
         finally:
-            cursor.close()
-            conn.close()
+            ma_conn.close()
 
     async def _handle_ma_convergence_consolidation(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
-        """수렴 횡보(상태 유지) 판별 필터"""
+        """수렴 횡보(상태 유지) 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
         duration = params.get("duration", 1)
+        if not lines or len(lines) < 2: return set()
 
-        if not lines or len(lines) < 2:
-            return set()
+        is_daily = any("daily" in l for l in lines)
+        table_name = "daily_ma" if is_daily else "minute_ma"
+        order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
-        windows = {
-            "ma_daily_5": 4, "ma_daily_20": 19, "ma_daily_60": 59, "ma_daily_120": 119,
-            "ma5": 4, "ma10": 9, "ma20": 19, "ma60": 59, "ma120": 119,
-        }
+        mapped = [f"ma{l.split('_')[-1]}" if l.startswith("ma_daily_") else l for l in lines]
+        max_candles = 390 if not is_daily else 300
+        if duration > max_candles: raise ValueError("duration 값이 정책 최대치를 초과합니다.")
 
-        is_daily = any("daily" in ma_line for ma_line in lines)
-        table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
-        order_clause = "date ASC" if is_daily else "date ASC, time ASC"
-        order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
-
-        max_candles = 200 if is_daily else 1950
-        max_window = max(windows.get(ma_line, 0) for ma_line in lines)
-        if duration > max_candles - max_window - 1:
-            raise ValueError(f"지정된 duration({duration})이 GC 보관 주기를 초과합니다.")
-
-        required_rows = max_window + duration + 1
-
-        ma_selects = []
-        for ma_line in lines:
-            w = windows.get(ma_line, 0)
-            ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
-                f"ELSE NULL END as {ma_line}"
-            )
-        
-        ma_select_str = ",\n                ".join(ma_selects)
-        
-        max_func = f"MAX({', '.join(lines)})"
-        min_func = f"MIN({', '.join(lines)})"
-        
+        max_func = f"MAX({', '.join(mapped)})"
+        min_func = f"MIN({', '.join(mapped)})"
         convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
-        ticker_cond = ""
-        if current_tickers is not None:
-            if not current_tickers:
-                return set()
-            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
-            ticker_cond = f"AND ticker IN ({placeholders})"
+        from core.database import connect_sqlite, connect_ma_db
+        if current_tickers is None:
+            conn = connect_sqlite()
+            rows = conn.execute("SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0").fetchall()
+            current_tickers = {r["ticker"] for r in rows}
+            conn.close()
+            
+        if not current_tickers: return set()
+        placeholders = ", ".join(f"'{t}'" for t in current_tickers)
 
         query = f"""
-        WITH active_tickers AS (
-            SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
-        ),
-        recent_data AS (
+        WITH recent_ma AS (
             SELECT * FROM (
-                SELECT d.*,
-                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name} d
-                JOIN active_tickers a ON d.ticker = a.ticker
-            ) WHERE rn <= {required_rows}
-        ),
-        calc_ma AS (
-            SELECT
-                *,
-                {ma_select_str}
-            FROM recent_data
+                SELECT m.*, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
+                FROM {table_name} m
+                WHERE ticker IN ({placeholders})
+            ) WHERE rn <= {duration}
         ),
         trend AS (
-            SELECT
-                *,
-                {trend_select}
-            FROM calc_ma
-            WHERE {' AND '.join(f'{line} IS NOT NULL' for line in lines)}
+            SELECT *, {trend_select} FROM recent_ma
+            WHERE {' AND '.join(f'{l} IS NOT NULL' for l in mapped)}
         )
-        SELECT ticker
-        FROM trend
-        WHERE rn <= {duration}
-        GROUP BY ticker
-        HAVING SUM(is_converged) = {duration};
+        SELECT ticker FROM trend
+        GROUP BY ticker HAVING SUM(is_converged) = {duration};
         """
-
-        from core.database import connect_sqlite
-
-        conn = connect_sqlite()
-        cursor = conn.cursor()
+        ma_conn = connect_ma_db()
         try:
-            cursor.execute(query)
-            rows = cursor.fetchall()
-            return {r[0] for r in rows}
+            return {r[0] for r in ma_conn.execute(query).fetchall()}
         finally:
-            cursor.close()
-            conn.close()
+            ma_conn.close()
 
     async def _handle_ma_convergence_point(self, params: dict[str, Any], current_tickers: set[str] | None = None) -> set[str]:
-        """수렴 지점(이벤트 발생) 판별 필터"""
+        """수렴 지점 발생 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
         within = params.get("within", 1)
+        if not lines or len(lines) < 2: return set()
 
-        if not lines or len(lines) < 2:
-            return set()
+        is_daily = any("daily" in l for l in lines)
+        table_name = "daily_ma" if is_daily else "minute_ma"
+        order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
-        windows = {
-            "ma_daily_5": 4, "ma_daily_20": 19, "ma_daily_60": 59, "ma_daily_120": 119,
-            "ma5": 4, "ma10": 9, "ma20": 19, "ma60": 59, "ma120": 119,
-        }
+        mapped = [f"ma{l.split('_')[-1]}" if l.startswith("ma_daily_") else l for l in lines]
+        max_candles = 390 if not is_daily else 300
+        if within > max_candles: raise ValueError("within 값이 정책 최대치를 초과합니다.")
 
-        is_daily = any("daily" in ma_line for ma_line in lines)
-        table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
-        order_clause = "date ASC" if is_daily else "date ASC, time ASC"
-        order_desc_clause = "date DESC" if is_daily else "date DESC, time DESC"
-
-        max_candles = 200 if is_daily else 1950
-        max_window = max(windows.get(ma_line, 0) for ma_line in lines)
-        if within > max_candles - max_window - 1:
-            raise ValueError(f"지정된 within({within})이 GC 보관 주기를 초과합니다.")
-
-        required_rows = max_window + within + 1
-
-        ma_selects = []
-        for ma_line in lines:
-            w = windows.get(ma_line, 0)
-            ma_selects.append(
-                f"CASE WHEN COUNT(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) = {w + 1} "
-                f"THEN AVG(close) OVER(PARTITION BY ticker ORDER BY rn ASC ROWS BETWEEN CURRENT ROW AND {w} FOLLOWING) "
-                f"ELSE NULL END as {ma_line}"
-            )
-        
-        ma_select_str = ",\n                ".join(ma_selects)
-        
-        max_func = f"MAX({', '.join(lines)})"
-        min_func = f"MIN({', '.join(lines)})"
-        
+        max_func = f"MAX({', '.join(mapped)})"
+        min_func = f"MIN({', '.join(mapped)})"
         convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
-        ticker_cond = ""
-        if current_tickers is not None:
-            if not current_tickers:
-                return set()
-            placeholders = ", ".join(f"'{t}'" for t in current_tickers)
-            ticker_cond = f"AND ticker IN ({placeholders})"
+        from core.database import connect_sqlite, connect_ma_db
+        if current_tickers is None:
+            conn = connect_sqlite()
+            rows = conn.execute("SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0").fetchall()
+            current_tickers = {r["ticker"] for r in rows}
+            conn.close()
+            
+        if not current_tickers: return set()
+        placeholders = ", ".join(f"'{t}'" for t in current_tickers)
 
         query = f"""
-        WITH active_tickers AS (
-            SELECT ticker FROM stock_codes 
-            WHERE is_halted = 0 AND is_admin_issue = 0 {ticker_cond}
-        ),
-        recent_data AS (
+        WITH recent_ma AS (
             SELECT * FROM (
-                SELECT d.*,
-                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc_clause}) as rn
-                FROM {table_name} d
-                JOIN active_tickers a ON d.ticker = a.ticker
-            ) WHERE rn <= {required_rows}
-        ),
-        calc_ma AS (
-            SELECT
-                *,
-                {ma_select_str}
-            FROM recent_data
+                SELECT m.*, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
+                FROM {table_name} m
+                WHERE ticker IN ({placeholders})
+            ) WHERE rn <= {within}
         ),
         trend AS (
-            SELECT
-                *,
-                {trend_select}
-            FROM calc_ma
-            WHERE {' AND '.join(f'{line} IS NOT NULL' for line in lines)}
+            SELECT *, {trend_select} FROM recent_ma
+            WHERE {' AND '.join(f'{l} IS NOT NULL' for l in mapped)}
         )
-        SELECT ticker
-        FROM trend
-        WHERE rn <= {within}
-          AND is_converged = 1
+        SELECT ticker FROM trend
+        WHERE is_converged = 1
         GROUP BY ticker;
         """
-
-        from core.database import connect_sqlite
-
-        conn = connect_sqlite()
-        cursor = conn.cursor()
+        ma_conn = connect_ma_db()
         try:
-            cursor.execute(query)
-            rows = cursor.fetchall()
-            return {r[0] for r in rows}
+            return {r[0] for r in ma_conn.execute(query).fetchall()}
         finally:
-            cursor.close()
-            conn.close()
+            ma_conn.close()
 
     async def _fetch_investor_rank(self, etc_cls_code: str, limit: int = 30) -> set[str]:
         """

@@ -106,28 +106,62 @@ async def process_ticker(
         logger.sched(f"[{ticker}] No valid OHLCV data found. Skipping.")
         return True
 
+    from core.database import connect_sqlite, connect_ma_db
+    from core.ma_calculator import ma_calculator
+
+    # 데이터 프레임 변환 후 시간순(ASC) 정렬
+    df = pd.DataFrame(processed_data)
+    df.drop_duplicates(subset=["ticker", "date"], inplace=True)
+    df = df.sort_values(by="date", ascending=True)
+
+    records = df.to_dict("records")
+    ma_records = []
+    
+    for row in records:
+        ma_calculator.add_daily_close(row["ticker"], row["close"])
+        ma = ma_calculator.get_daily_ma(row["ticker"])
+        ma_records.append({
+            "ticker": row["ticker"],
+            "date": row["date"],
+            "ma5": ma["ma5"],
+            "ma10": ma["ma10"],
+            "ma20": ma["ma20"],
+            "ma60": ma["ma60"],
+            "ma120": ma["ma120"],
+            "ma200": ma["ma200"],
+        })
+
     # SQLite에 Bulk UPSERT (INSERT OR REPLACE)
     conn = connect_sqlite()
+    ma_conn = connect_ma_db()
     try:
-        df = pd.DataFrame(processed_data)
-        # 중복 제거 (혹시 겹치는 날짜가 있을 경우)
-        df.drop_duplicates(subset=["ticker", "date"], inplace=True)
-
         cursor = conn.cursor()
         cursor.executemany(
             """
             INSERT OR REPLACE INTO daily_ohlcv (ticker, date, open, high, low, close, volume, amount)
             VALUES (:ticker, :date, :open, :high, :low, :close, :volume, :amount)
         """,
-            df.to_dict("records"),
+            records,
         )
         conn.commit()
+        
+        ma_cursor = ma_conn.cursor()
+        ma_cursor.executemany(
+            """
+            INSERT OR REPLACE INTO daily_ma (ticker, date, ma5, ma10, ma20, ma60, ma120, ma200)
+            VALUES (:ticker, :date, :ma5, :ma10, :ma20, :ma60, :ma120, :ma200)
+        """,
+            ma_records,
+        )
+        ma_conn.commit()
+        
         return True
     except Exception as e:
         logger.error(f"[{ticker}] DB Save Error: {e}")
         raise e
     finally:
         conn.close()
+        ma_conn.close()
 
 
 async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
