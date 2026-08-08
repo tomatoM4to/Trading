@@ -81,7 +81,7 @@ async def fetch_minute_data(
 async def process_ticker(
     ticker: str,
     last_datetime: str | None = None,
-    limit_days: int = 3,
+    limit_days: int = 14,
     max_steps: int = 15,
     priority: int = 7,
 ) -> tuple[bool, str | None]:
