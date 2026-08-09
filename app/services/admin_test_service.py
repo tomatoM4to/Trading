@@ -3,9 +3,9 @@ from pathlib import Path
 
 from core.database import (
     connect_sqlite,
+    sync_memory_to_disk,
     test_db_var,
     test_mem_var,
-    sync_memory_to_disk,
 )
 from fastapi import HTTPException
 from services.admin_daily_service import verify_daily_integrity_service
@@ -46,7 +46,7 @@ async def test_daily_scheduler_integration_service():
     try:
         # 이 커넥션은 테스트가 끝날 때까지 닫지 않아 메모리 DB의 증발을 막습니다.
         test_keepalive_conn = connect_sqlite()
-        
+
         # 3. 테스트용 인메모리 DB 스키마 생성 및 종목 이식
         conn_test = connect_sqlite()
         try:
@@ -212,7 +212,7 @@ async def test_minute_scheduler_integration_service():
     try:
         # 이 커넥션은 테스트가 끝날 때까지 닫지 않아 메모리 DB의 증발을 막습니다.
         test_keepalive_conn = connect_sqlite()
-        
+
         # 스키마 초기화
         conn_test = connect_sqlite()
         try:

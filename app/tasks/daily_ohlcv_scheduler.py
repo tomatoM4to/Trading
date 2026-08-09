@@ -106,7 +106,7 @@ async def process_ticker(
         logger.sched(f"[{ticker}] No valid OHLCV data found. Skipping.")
         return True
 
-    from core.database import connect_sqlite, connect_ma_db
+    from core.database import connect_ma_db, connect_sqlite
     from core.ma_calculator import ma_calculator
 
     # 데이터 프레임 변환 후 시간순(ASC) 정렬
@@ -116,20 +116,22 @@ async def process_ticker(
 
     records = df.to_dict("records")
     ma_records = []
-    
+
     for row in records:
         ma_calculator.add_daily_close(row["ticker"], row["close"])
         ma = ma_calculator.get_daily_ma(row["ticker"])
-        ma_records.append({
-            "ticker": row["ticker"],
-            "date": row["date"],
-            "ma5": ma["ma5"],
-            "ma10": ma["ma10"],
-            "ma20": ma["ma20"],
-            "ma60": ma["ma60"],
-            "ma120": ma["ma120"],
-            "ma200": ma["ma200"],
-        })
+        ma_records.append(
+            {
+                "ticker": row["ticker"],
+                "date": row["date"],
+                "ma5": ma["ma5"],
+                "ma10": ma["ma10"],
+                "ma20": ma["ma20"],
+                "ma60": ma["ma60"],
+                "ma120": ma["ma120"],
+                "ma200": ma["ma200"],
+            }
+        )
 
     # SQLite에 Bulk UPSERT (INSERT OR REPLACE)
     conn = connect_sqlite()
@@ -144,7 +146,7 @@ async def process_ticker(
             records,
         )
         conn.commit()
-        
+
         ma_cursor = ma_conn.cursor()
         ma_cursor.executemany(
             """
@@ -154,7 +156,7 @@ async def process_ticker(
             ma_records,
         )
         ma_conn.commit()
-        
+
         return True
     except Exception as e:
         logger.error(f"[{ticker}] DB Save Error: {e}")

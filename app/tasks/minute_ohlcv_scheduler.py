@@ -170,30 +170,32 @@ async def process_ticker(
         df_clean = df_clean.dropna(subset=["date", "time", "close"])
         if not df_clean.empty:
             success_any = True
-            
-            from core.database import connect_sqlite, connect_ma_db
+
+            from core.database import connect_ma_db, connect_sqlite
             from core.ma_calculator import ma_calculator
-            
+
             # 연산 시계열 보장을 위해 시간순(ASC) 정렬
             df_clean = df_clean.sort_values(by=["date", "time"], ascending=[True, True])
-            
+
             records = df_clean.to_dict("records")
             ma_records = []
-            
+
             for row in records:
                 ma_calculator.add_minute_close(row["ticker"], row["close"])
                 ma = ma_calculator.get_minute_ma(row["ticker"])
-                ma_records.append({
-                    "ticker": row["ticker"],
-                    "date": row["date"],
-                    "time": row["time"],
-                    "ma5": ma["ma5"],
-                    "ma10": ma["ma10"],
-                    "ma20": ma["ma20"],
-                    "ma60": ma["ma60"],
-                    "ma120": ma["ma120"],
-                    "ma200": ma["ma200"],
-                })
+                ma_records.append(
+                    {
+                        "ticker": row["ticker"],
+                        "date": row["date"],
+                        "time": row["time"],
+                        "ma5": ma["ma5"],
+                        "ma10": ma["ma10"],
+                        "ma20": ma["ma20"],
+                        "ma60": ma["ma60"],
+                        "ma120": ma["ma120"],
+                        "ma200": ma["ma200"],
+                    }
+                )
 
             conn = connect_sqlite()
             ma_conn = connect_ma_db()
@@ -209,7 +211,7 @@ async def process_ticker(
                 """
                 cursor.executemany(insert_sql, records)
                 conn.commit()
-                
+
                 # 2. MA -> 인메모리 DB
                 ma_cursor = ma_conn.cursor()
                 ma_insert_sql = """

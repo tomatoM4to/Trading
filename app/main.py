@@ -69,7 +69,10 @@ async def lifespan(app: FastAPI):
         )
         # SCHED가 꺼져 있어도 스크리너를 위해 MA 인메모리 DB는 수화(Hydration)시켜야 함
         from core.bootstrap import rebuild_ma_database
-        logger.info("[Memory DB] Hydrating In-Memory MA Database from disk (SCHED=False)...")
+
+        logger.info(
+            "[Memory DB] Hydrating In-Memory MA Database from disk (SCHED=False)..."
+        )
         asyncio.create_task(rebuild_ma_database())
 
     yield  # Application runs here
@@ -93,7 +96,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://trading-one-kappa.vercel.app"
+        "https://trading-one-kappa.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],

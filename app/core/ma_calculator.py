@@ -1,4 +1,3 @@
-import statistics
 from collections import defaultdict, deque
 
 
@@ -34,7 +33,7 @@ class MACalculator:
         """
         length = len(cache)
         closes = list(cache)
-        
+
         result = {}
         for p in self.ma_periods:
             if length < p:

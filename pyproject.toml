@@ -17,6 +17,9 @@ dev = [
     "ruff>=0.15.20",
 ]
 
+[tool.ruff]
+extend-exclude = ["open-trading-api"]
+
 [tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors

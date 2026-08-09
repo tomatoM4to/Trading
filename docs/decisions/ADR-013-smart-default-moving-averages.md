@@ -12,8 +12,8 @@ Accepted
 
 ## Decision
 1. **이평선(MA) 주기 표준화**:
-   - 단기(분봉) 이평선: `5m, 10m, 20m, 60m, 120m` (디버깅용 `1m`)
-   - 장기(일봉) 이평선: `5d, 20d, 60d, 120d` (디버깅용 `1d`)
+   - 단기(분봉) 이평선: `5m, 10m, 20m, 60m, 120m, 200m`
+   - 장기(일봉) 이평선: `5d, 20d, 60d, 120d, 200d`
    - 백엔드의 SQLite 윈도우 함수를 상기 주기에 맞게 재구성(`ROWS BETWEEN n PRECEDING`).
 2. **Smart Defaults 도입**:
    - 강제 제약(Systematic restriction) 대신 스마트 디폴트를 적용합니다. 

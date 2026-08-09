@@ -1,10 +1,10 @@
 import asyncio
 import logging
 
-from core.database import connect_sqlite, connect_ma_db
+from core.database import connect_ma_db, connect_sqlite
+from core.ma_calculator import ma_calculator
 from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
 from tasks.init_stock_codes import init_stock_codes_db
-from core.ma_calculator import ma_calculator
 
 logger = logging.getLogger(__name__)
 
@@ -13,69 +13,115 @@ async def rebuild_ma_database():
     """디스크 DB의 OHLCV를 읽어와 In-Memory MA 테이블을 셋업합니다."""
     logger.sched("[Bootstrap] Starting MA Database Rebuild (Cold Start)...")
     ma_calculator.clear()
-    
+
     disk_conn = connect_sqlite()
     ma_conn = connect_ma_db()
-    
+
     try:
         # 1. 기존 In-Memory MA 테이블 초기화 (08:00 리셋 대비)
         ma_conn.execute("DELETE FROM daily_ma")
         ma_conn.execute("DELETE FROM minute_ma")
-        
+
         # 2. 일봉 MA 리빌드
         logger.sched("[Bootstrap] Rebuilding daily_ma from disk...")
-        cursor = disk_conn.execute("SELECT ticker, date, close FROM daily_ohlcv ORDER BY date ASC")
-        
+        cursor = disk_conn.execute(
+            "SELECT ticker, date, close FROM daily_ohlcv ORDER BY date ASC"
+        )
+
         ma_records = []
         for row in cursor:
-            ticker, date, close = row['ticker'], row['date'], row['close']
+            ticker, date, close = row["ticker"], row["date"], row["close"]
             ma_calculator.add_daily_close(ticker, close)
             res = ma_calculator.get_daily_ma(ticker)
-            ma_records.append((ticker, date, res['ma5'], res['ma10'], res['ma20'], res['ma60'], res['ma120'], res['ma200']))
-            
+            ma_records.append(
+                (
+                    ticker,
+                    date,
+                    res["ma5"],
+                    res["ma10"],
+                    res["ma20"],
+                    res["ma60"],
+                    res["ma120"],
+                    res["ma200"],
+                )
+            )
+
             if len(ma_records) >= 10000:
-                ma_conn.executemany("INSERT OR IGNORE INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ma_records)
+                ma_conn.executemany(
+                    "INSERT OR IGNORE INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    ma_records,
+                )
                 ma_records.clear()
         if ma_records:
-            ma_conn.executemany("INSERT OR IGNORE INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ma_records)
+            ma_conn.executemany(
+                "INSERT OR IGNORE INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ma_records,
+            )
             ma_records.clear()
         ma_conn.commit()
-        
+
         # 3. 분봉 MA 리빌드 (최근 3일치만 가져와서 연산 - 앞의 199개는 예열용으로 사용됨)
         logger.sched("[Bootstrap] Rebuilding minute_ma from disk (Recent 3 days)...")
         # 성능을 위해 최근 3일의 날짜를 먼저 구함
-        dates_cursor = disk_conn.execute("SELECT DISTINCT date FROM minute_ohlcv ORDER BY date DESC LIMIT 3")
-        recent_dates = [str(r['date']) for r in dates_cursor.fetchall()]
-        
+        dates_cursor = disk_conn.execute(
+            "SELECT DISTINCT date FROM minute_ohlcv ORDER BY date DESC LIMIT 3"
+        )
+        recent_dates = [str(r["date"]) for r in dates_cursor.fetchall()]
+
         if recent_dates:
             placeholders = ",".join("?" for _ in recent_dates)
             query = f"""
-                SELECT ticker, date, time, close 
-                FROM minute_ohlcv 
+                SELECT ticker, date, time, close
+                FROM minute_ohlcv
                 WHERE date IN ({placeholders})
                 ORDER BY date ASC, time ASC
             """
             cursor = disk_conn.execute(query, recent_dates)
-            
+
             for row in cursor:
-                ticker, date, time, close = row['ticker'], row['date'], row['time'], row['close']
+                ticker, date, time, close = (
+                    row["ticker"],
+                    row["date"],
+                    row["time"],
+                    row["close"],
+                )
                 ma_calculator.add_minute_close(ticker, close)
                 res = ma_calculator.get_minute_ma(ticker)
-                ma_records.append((ticker, date, time, res['ma5'], res['ma10'], res['ma20'], res['ma60'], res['ma120'], res['ma200']))
-                
+                ma_records.append(
+                    (
+                        ticker,
+                        date,
+                        time,
+                        res["ma5"],
+                        res["ma10"],
+                        res["ma20"],
+                        res["ma60"],
+                        res["ma120"],
+                        res["ma200"],
+                    )
+                )
+
                 if len(ma_records) >= 10000:
-                    ma_conn.executemany("INSERT OR IGNORE INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", ma_records)
+                    ma_conn.executemany(
+                        "INSERT OR IGNORE INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        ma_records,
+                    )
                     ma_records.clear()
             if ma_records:
-                ma_conn.executemany("INSERT OR IGNORE INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", ma_records)
+                ma_conn.executemany(
+                    "INSERT OR IGNORE INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ma_records,
+                )
             ma_conn.commit()
-            
+
         logger.sched("[Bootstrap] MA Database Rebuild Complete.")
     except Exception as e:
         logger.error(f"[Bootstrap] Failed to rebuild MA database: {e}")
     finally:
         disk_conn.close()
         ma_conn.close()
+
+
 async def run_bootstrap_pipeline():
     """
     서버 구동 시 DB 빈 상태를 감지하여

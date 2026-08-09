@@ -80,7 +80,8 @@ async def get_chart_data(
                     CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) = 5 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_5,
                     CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) = 20 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_20,
                     CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) = 60 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_60,
-                    CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_120
+                    CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_120,
+                    CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 199 PRECEDING AND CURRENT ROW) = 200 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 199 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_200
                 FROM daily_ohlcv
                 WHERE ticker = ?
                 ORDER BY date ASC
@@ -107,11 +108,13 @@ async def get_chart_data(
                         ma20=None,
                         ma60=None,
                         ma120=None,
+                        ma200=None,
                         ma_daily_1=r["ma_daily_1"],
                         ma_daily_5=r["ma_daily_5"],
                         ma_daily_20=r["ma_daily_20"],
                         ma_daily_60=r["ma_daily_60"],
                         ma_daily_120=r["ma_daily_120"],
+                        ma_daily_200=r["ma_daily_200"],
                     )
                 )
 
@@ -133,7 +136,8 @@ async def get_chart_data(
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) = 5 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_5,
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) = 20 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_20,
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) = 60 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_60,
-                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_120
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_120,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 199 PRECEDING AND CURRENT ROW) = 200 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 199 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_200
                     FROM daily_ohlcv
                     WHERE ticker = ?
                 ),
@@ -146,14 +150,15 @@ async def get_chart_data(
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) = 10 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) ELSE NULL END as ma10,
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) = 20 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) ELSE NULL END as ma20,
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) = 60 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) ELSE NULL END as ma60,
-                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma120
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma120,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 199 PRECEDING AND CURRENT ROW) = 200 THEN AVG(close) OVER (ORDER BY date ASC, time ASC ROWS BETWEEN 199 PRECEDING AND CURRENT ROW) ELSE NULL END as ma200
                     FROM minute_ohlcv
                     WHERE ticker = ?
                 )
                 SELECT
                     m.date, m.time, m.open, m.high, m.low, m.close, m.volume,
-                    m.ma5, m.ma10, m.ma20, m.ma60, m.ma120,
-                    d.ma_daily_1, d.ma_daily_5, d.ma_daily_20, d.ma_daily_60, d.ma_daily_120
+                    m.ma5, m.ma10, m.ma20, m.ma60, m.ma120, m.ma200,
+                    d.ma_daily_1, d.ma_daily_5, d.ma_daily_20, d.ma_daily_60, d.ma_daily_120, d.ma_daily_200
                 FROM minute_ma m
                 LEFT JOIN daily_ma d ON m.date = d.date
                 WHERE m.date >= ?
@@ -181,11 +186,13 @@ async def get_chart_data(
                         ma20=r["ma20"],
                         ma60=r["ma60"],
                         ma120=r["ma120"],
+                        ma200=r["ma200"],
                         ma_daily_1=r["ma_daily_1"],
                         ma_daily_5=r["ma_daily_5"],
                         ma_daily_20=r["ma_daily_20"],
                         ma_daily_60=r["ma_daily_60"],
                         ma_daily_120=r["ma_daily_120"],
+                        ma_daily_200=r["ma_daily_200"],
                     )
                 )
 

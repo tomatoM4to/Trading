@@ -7,7 +7,7 @@ import { ScreenerResultTable, ScreenerResult } from "./ScreenerResultTable";
 import { ChartModal } from "./ChartModal";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { Button } from "@/components/ui/button";
-import { Play, Plus } from "lucide-react";
+import { Play, Plus, ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
 
 // ID generator for client-side
@@ -39,6 +39,7 @@ export function ScreenerBuilder() {
   const [isLoading, setIsLoading] = useState(false);
   const [filterStatuses, setFilterStatuses] = useState<Record<string, FilterStatus>>({});
   const [remainingCount, setRemainingCount] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<"default" | "ranking">("default");
 
   const [startTime, setStartTime] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState<number>(0);
@@ -201,7 +202,8 @@ export function ScreenerBuilder() {
               market_cap: item.market_cap,
               close: item.close,
               amount: item.amount,
-              change_rate: item.change_rate
+              change_rate: item.change_rate,
+              filter_values: item.filter_values || {}
             }));
             setResults(mappedResults);
             setIsLoading(false);
@@ -291,8 +293,20 @@ export function ScreenerBuilder() {
       </div>
 
       <div className="pt-8 border-t space-y-4">
-        <h3 className="text-xl font-semibold">검색 결과</h3>
-        <ScreenerResultTable results={results} onRowClick={setSelectedTicker} />
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-semibold">검색 결과</h3>
+          {results.length > 0 && (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => setViewMode(prev => prev === "default" ? "ranking" : "default")}
+            >
+              <ArrowRightLeft className="w-4 h-4 mr-2" />
+              {viewMode === "default" ? "랭킹 뷰로 보기" : "기본 뷰로 보기"}
+            </Button>
+          )}
+        </div>
+        <ScreenerResultTable results={results} onRowClick={setSelectedTicker} filters={filters} viewMode={viewMode} />
       </div>
 
       <ChartModal
