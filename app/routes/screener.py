@@ -13,10 +13,10 @@ async def run_screener(request: ScreenerRequest):
     """
     try:
         return StreamingResponse(
-            screener_engine.run_pipeline_stream(request),
-            media_type="text/event-stream"
+            screener_engine.run_pipeline_stream(request), media_type="text/event-stream"
         )
     except Exception as e:
         import traceback
+
         traceback.print_exc()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
