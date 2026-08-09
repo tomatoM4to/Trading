@@ -27,6 +27,7 @@ class ChartDataPoint(BaseModel):
     ma20: float | None = None
     ma60: float | None = None
     ma120: float | None = None
+    ma200: float | None = None
 
     # 장기 이동평균선 (일봉 기준 매핑)
     ma_daily_1: float | None = None
@@ -34,6 +35,7 @@ class ChartDataPoint(BaseModel):
     ma_daily_20: float | None = None
     ma_daily_60: float | None = None
     ma_daily_120: float | None = None
+    ma_daily_200: float | None = None
 
 
 class ChartDataResponse(BaseModel):
