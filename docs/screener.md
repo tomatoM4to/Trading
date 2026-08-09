@@ -54,7 +54,7 @@ data: {"type": "progress", "filter_id": "ast-node-1234", "remaining": 1500}
 ```
 
 **2. Complete Event (최종 완료)**
-모든 필터 파이프라인 연산이 끝나면 스칼라 서브쿼리로 추출된 종목 리치 데이터(Enrichment)와 각 종목이 획득한 지표 점수(`filter_values`)가 포함된 최종 결과를 반환합니다. 프론트엔드는 이 `filter_values` 내의 Float 값들을 바탕으로 사용자 UI에서 각 팩터(수렴도, 교차폭 등)에 대한 **다중 정렬(Multi-Factor Ranking)**을 수행합니다.
+모든 필터 파이프라인 연산이 끝나면 스칼라 서브쿼리로 추출된 종목 리치 데이터(Enrichment)와 각 종목이 획득한 지표 점수(`filter_values`)가 포함된 최종 결과를 반환합니다. 프론트엔드는 이 `filter_values` 내의 Float 값들을 바탕으로 사용자 UI에서 각 팩터(수렴도, 교차폭 등)에 대한 **다중 정렬(Multi-Factor Ranking)** 및 **평균 순위 산출(Ranking View)**을 수행합니다 (참고: `docs/specs/screener_ranking_view.md`).
 ```json
 data: {
   "type": "complete",
