@@ -1,24 +1,21 @@
-- [ ] Task: 1. ScreenerResultItem 스키마 업데이트
-  - Acceptance: `ScreenerResultItem` 모델에 `filter_values: dict[str, float]`가 선택적으로 추가됨.
-  - Verify: 서버 기동 시 Pydantic 스키마 에러가 발생하지 않음.
-  - Files: `app/schemas/screener.py`
+# Todo: Screener Ranking View
 
-- [ ] Task: 2. 스크리너 코어 파이프라인(Dict Merge) 로직 변경
-  - Acceptance: `run_pipeline` 및 `run_pipeline_stream`의 `chain_set`이 `chain_dict`로 변경되며, 두 딕셔너리의 교집합(Key)과 `filter_values` 병합 로직이 구현됨. (API 랭킹 필터들은 기본값 0.0을 반환하도록 수정)
-  - Verify: 기존 `set()` 연산 코드가 `dict` 연산으로 정상 치환되었는지 육안 확인.
+- [ ] Task: Update `_fetch_investor_rank` in `app/services/screener_service.py`.
+  - Acceptance: The function enumerates the unique tickers and assigns `index + 1` (as float) instead of `0.0`.
+  - Verify: Run `uv run python scripts/benchmark_screener.py` and inspect Heavy 5's output payload to ensure `foreign_net_buy_rank` values are `1.0`, `2.0`, etc.
   - Files: `app/services/screener_service.py`
 
-- [ ] Task: 3. 수렴(Convergence) 필터 쿼리 및 반환값 수정
-  - Acceptance: `_handle_ma_convergence_consolidation` 및 `_handle_ma_convergence_point` 쿼리에서 오차율(Float)을 SELECT하여 딕셔너리로 반환함.
-  - Verify: 수렴 필터 단독 요청 시 `filter_values`에 오차율 값이 담겨 오는지 확인.
-  - Files: `app/services/screener_service.py`
+- [ ] Task: Setup Frontend State and AST Parsing in `ScreenerResultTable.tsx`.
+  - Acceptance: The component maintains a `viewMode` state and maps each AST node ID to its filter `type` so it knows the sorting direction (e.g., `ma_cross` -> `desc`).
+  - Verify: Build the frontend `cd web && npm run build` and ensure no type errors.
+  - Files: `web/components/screener/ScreenerResultTable.tsx`, `web/types/screener.ts` (if needed).
 
-- [ ] Task: 4. 정배열(Alignment) 및 크로스(Cross) 필터 쿼리 및 반환값 수정
-  - Acceptance: `_handle_ma_alignment`에서 이격도 편차율(Float)을, `_handle_ma_cross`에서 차이 폭(Float)을 SELECT하여 딕셔너리로 반환함.
-  - Verify: 각 필터 단독 요청 시 `filter_values`에 값이 담겨 오는지 확인.
-  - Files: `app/services/screener_service.py`
+- [ ] Task: Implement Rank Computation Engine.
+  - Acceptance: Given the items and AST mapping, compute individual integer ranks per filter (handling ties) and an overall average rank.
+  - Verify: Log the computed `rankedItems` to the browser console and manually verify the math.
+  - Files: `web/components/screener/ScreenerResultTable.tsx`, `web/lib/ranking.ts` (or similar utility file).
 
-- [ ] Task: 5. get_ticker_names에 결과 매핑 및 벤치마크 테스트
-  - Acceptance: `get_ticker_names`가 딕셔너리를 받아 최종 결과 리스트의 `filter_values` 필드에 맵핑해주며, `benchmark_screener.py` 실행 시 무사히 통과됨.
-  - Verify: `benchmark_screener.py` 실행 후 `Success` 로그 확인 및 SSE 응답 결과 완벽성 검증.
-  - Files: `app/services/screener_service.py`, `scripts/benchmark_screener.py`
+- [ ] Task: Build Ranking View UI.
+  - Acceptance: A toggle button exists. In Ranking View, dynamic columns show up (one per filter + Final Average Rank). The table is sorted by Final Rank.
+  - Verify: visually confirm in the browser that the table switches correctly and sorting works.
+  - Files: `web/components/screener/ScreenerResultTable.tsx`

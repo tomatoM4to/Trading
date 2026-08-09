@@ -608,8 +608,11 @@ class ScreenerEngine:
                 if t not in unique_tickers:
                     unique_tickers.append(t)
 
-            # API 호출 순위는 단순 0.0 부여 (상위 30건에만 드는 게 목적)
-            return {t: {filter_id: 0.0} for t in unique_tickers[:limit]}
+            # API 반환 순서대로 1.0, 2.0... 의 순위(Float)를 부여
+            return {
+                t: {filter_id: float(i + 1)}
+                for i, t in enumerate(unique_tickers[:limit])
+            }
         return {}
 
     async def _handle_foreign_net_buy_rank(
