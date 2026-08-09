@@ -47,25 +47,20 @@ class ScreenerEngine:
         
         # K (required_rows) 와 L 계산
         if f_type == "ma_alignment" or f_type == "ma_convergence_consolidation":
-            max_window = max((windows.get(line, 0) for line in lines), default=0)
             duration = params.get("duration", 1)
-            k = max_window + duration + 1
+            k = duration
             l = len(lines) if lines else 1
             return float(k * l * table_weight)
             
         elif f_type == "ma_cross":
-            w_short = windows.get(short_line, 0)
-            w_long = windows.get(long_line, 0)
-            max_window = max(w_short, w_long)
             within = params.get("within", 1)
-            k = max_window + within + 2
+            k = within + 1
             l = 2
             return float(k * l * table_weight)
             
         elif f_type == "ma_convergence_point":
-            max_window = max((windows.get(line, 0) for line in lines), default=0)
             within = params.get("within", 1)
-            k = max_window + within + 1
+            k = within
             l = len(lines) if lines else 1
             return float(k * l * table_weight)
             
@@ -262,7 +257,8 @@ class ScreenerEngine:
             conn.close()
             
         if not current_tickers: return set()
-        placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+        placeholders = ", ".join("?" for _ in current_tickers)
+        params = tuple(current_tickers)
 
         query = f"""
         WITH recent_ma AS (
@@ -281,7 +277,7 @@ class ScreenerEngine:
         """
         ma_conn = connect_ma_db()
         try:
-            return {r[0] for r in ma_conn.execute(query).fetchall()}
+            return {r[0] for r in ma_conn.execute(query, params).fetchall()}
         finally:
             ma_conn.close()
 
@@ -316,7 +312,8 @@ class ScreenerEngine:
             conn.close()
             
         if not current_tickers: return set()
-        placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+        placeholders = ", ".join("?" for _ in current_tickers)
+        params = tuple(current_tickers)
 
         query = f"""
         WITH recent_ma AS (
@@ -342,7 +339,7 @@ class ScreenerEngine:
         """
         ma_conn = connect_ma_db()
         try:
-            return {r[0] for r in ma_conn.execute(query).fetchall()}
+            return {r[0] for r in ma_conn.execute(query, params).fetchall()}
         finally:
             ma_conn.close()
 
@@ -374,7 +371,8 @@ class ScreenerEngine:
             conn.close()
             
         if not current_tickers: return set()
-        placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+        placeholders = ", ".join("?" for _ in current_tickers)
+        params = tuple(current_tickers)
 
         query = f"""
         WITH recent_ma AS (
@@ -393,7 +391,7 @@ class ScreenerEngine:
         """
         ma_conn = connect_ma_db()
         try:
-            return {r[0] for r in ma_conn.execute(query).fetchall()}
+            return {r[0] for r in ma_conn.execute(query, params).fetchall()}
         finally:
             ma_conn.close()
 
@@ -425,7 +423,8 @@ class ScreenerEngine:
             conn.close()
             
         if not current_tickers: return set()
-        placeholders = ", ".join(f"'{t}'" for t in current_tickers)
+        placeholders = ", ".join("?" for _ in current_tickers)
+        params = tuple(current_tickers)
 
         query = f"""
         WITH recent_ma AS (
@@ -445,7 +444,7 @@ class ScreenerEngine:
         """
         ma_conn = connect_ma_db()
         try:
-            return {r[0] for r in ma_conn.execute(query).fetchall()}
+            return {r[0] for r in ma_conn.execute(query, params).fetchall()}
         finally:
             ma_conn.close()
 

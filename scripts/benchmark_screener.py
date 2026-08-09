@@ -209,7 +209,7 @@ def run_benchmark(host: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Screener Benchmark")
-    parser.add_argument("--host", type=str, default="https://168.107.55.31.nip.io", help="Target server host")
+    parser.add_argument("--host", type=str, default="http://127.0.0.1:8000", help="Target server host")
     args = parser.parse_args()
 
     run_benchmark(args.host)
