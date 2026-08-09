@@ -31,17 +31,17 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
   const [error, setError] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState<string>("1");
   const [visibleMAs, setVisibleMAs] = useState<Record<string, boolean>>({
-    ma1: false,
     ma5: true,
     ma10: true,
     ma20: true,
     ma60: true,
     ma120: true,
-    ma_daily_1: false,
+    ma200: true,
     ma_daily_5: false,
     ma_daily_20: false,
     ma_daily_60: false,
     ma_daily_120: false,
+    ma_daily_200: false,
   });
 
   const isDailyTF = DAILY_TIMEFRAMES.some(tf => tf.value === timeframe);
@@ -54,10 +54,12 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
       ma20: !isDailyTF,
       ma60: !isDailyTF,
       ma120: !isDailyTF,
+      ma200: !isDailyTF,
       ma_daily_5: isDailyTF,
       ma_daily_20: isDailyTF,
       ma_daily_60: isDailyTF,
       ma_daily_120: isDailyTF,
+      ma_daily_200: isDailyTF,
     }));
   }, [isDailyTF]);
 

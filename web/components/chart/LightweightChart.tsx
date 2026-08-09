@@ -5,17 +5,17 @@ import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickSeries, LineS
 import { AggregatedCandle, LineDataPoint } from "../../lib/chart-utils";
 
 export const MA_CONFIGS: Record<string, { color: string; title: string; lineWidth?: number }> = {
-  ma1: { color: "#9e9e9e", title: "1m (Debug)", lineWidth: 2 },
   ma5: { color: "#ec407a", title: "5m", lineWidth: 2 },
   ma10: { color: "#29b6f6", title: "10m", lineWidth: 2 },
   ma20: { color: "#ffa726", title: "20m", lineWidth: 2 },
   ma60: { color: "#66bb6a", title: "60m", lineWidth: 2 },
   ma120: { color: "#ab47bc", title: "120m", lineWidth: 2 },
-  ma_daily_1: { color: "#8bc34a", title: "1D (Debug)", lineWidth: 2 },
+  ma200: { color: "#ff7043", title: "200m", lineWidth: 2 },
   ma_daily_5: { color: "#4caf50", title: "5d", lineWidth: 2 },
   ma_daily_20: { color: "#2196f3", title: "20d", lineWidth: 2 },
   ma_daily_60: { color: "#3f51b5", title: "60d", lineWidth: 2 },
   ma_daily_120: { color: "#9c27b0", title: "120d", lineWidth: 2 },
+  ma_daily_200: { color: "#f06292", title: "200d", lineWidth: 2 },
 };
 
 interface LightweightChartProps {

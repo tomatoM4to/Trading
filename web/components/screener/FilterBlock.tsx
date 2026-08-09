@@ -124,7 +124,7 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
               <div className="flex-auto min-w-[200px]">
                 <label className="text-xs font-semibold text-muted-foreground mb-2 block">이평선 선택 (Lines)</label>
                 <div className="flex items-center gap-3">
-                  {["5", "10", "20", "60", "120"].map((line) => {
+                  {["5", "10", "20", "60", "120", "200"].map((line) => {
                     const isChecked = ((filter.params.selected_lines as string[]) || []).includes(line);
                     return (
                       <div key={line} className="flex items-center space-x-1">
@@ -194,7 +194,7 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
                 >
                   <SelectTrigger><SelectValue placeholder="장기" /></SelectTrigger>
                   <SelectContent>
-                    {["10", "20", "60", "120"].map(line => <SelectItem key={line} value={line}>{line}</SelectItem>)}
+                    {["10", "20", "60", "120", "200"].map(line => <SelectItem key={line} value={line}>{line}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -244,7 +244,7 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
               <div className="flex-auto min-w-[200px]">
                 <label className="text-xs font-semibold text-muted-foreground mb-2 block">이평선 선택 (Lines)</label>
                 <div className="flex items-center gap-3">
-                  {["5", "10", "20", "60", "120"].map((line) => {
+                  {["5", "10", "20", "60", "120", "200"].map((line) => {
                     const isChecked = ((filter.params.selected_lines as string[]) || []).includes(line);
                     return (
                       <div key={line} className="flex items-center space-x-1">
