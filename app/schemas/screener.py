@@ -47,6 +47,9 @@ class ScreenerResultItem(BaseModel):
     close: float | None = Field(default=None, description="현재가")
     amount: float | None = Field(default=None, description="당일 누적 거래대금")
     change_rate: float | None = Field(default=None, description="전일 대비 등락률(%)")
+    filter_values: dict[str, float] = Field(
+        default_factory=dict, description="각 필터별 조건 부합 강도를 나타내는 추출 값"
+    )
 
 
 class ScreenerResponse(BaseModel):

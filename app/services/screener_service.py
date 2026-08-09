@@ -92,36 +92,46 @@ class ScreenerEngine:
 
         return chains
 
-    async def run_pipeline(self, request: ScreenerRequest) -> set[str]:
+    async def run_pipeline(
+        self, request: ScreenerRequest
+    ) -> dict[str, dict[str, float]]:
         """
-        주어진 AST 파이프라인을 최적화(분할 및 정렬)한 후 Set 연산을 수행합니다.
+        주어진 AST 파이프라인을 최적화(분할 및 정렬)한 후 딕셔너리 기반 연산을 수행합니다.
         """
         chains = self._optimize_pipeline(request)
         if not chains:
-            return set()
+            return {}
 
-        final_set = set()
+        final_dict = {}
 
         for chain in chains:
-            chain_set = None
+            chain_dict = None
 
             for filter_node in chain:
-                if chain_set is not None and not chain_set:
+                if chain_dict is not None and not chain_dict:
                     break
 
-                result_set = await self._execute_filter(
-                    filter_node, current_tickers=chain_set
+                result_dict = await self._execute_filter(
+                    filter_node, current_tickers=chain_dict
                 )
 
-                if chain_set is None:
-                    chain_set = result_set
+                if chain_dict is None:
+                    chain_dict = result_dict
                 else:
-                    chain_set = chain_set & result_set
+                    new_dict = {}
+                    for ticker, values in chain_dict.items():
+                        if ticker in result_dict:
+                            new_dict[ticker] = values | result_dict[ticker]
+                    chain_dict = new_dict
 
-            if chain_set:
-                final_set = final_set | chain_set
+            if chain_dict:
+                for ticker, values in chain_dict.items():
+                    if ticker in final_dict:
+                        final_dict[ticker] = final_dict[ticker] | values
+                    else:
+                        final_dict[ticker] = values
 
-        return final_set
+        return final_dict
 
     async def run_pipeline_stream(self, request: ScreenerRequest):
         """
@@ -135,48 +145,58 @@ class ScreenerEngine:
                 yield f"data: {json.dumps({'type': 'complete', 'items': []})}\n\n"
                 return
 
-            final_set = set()
+            final_dict = {}
 
             for chain in chains:
-                chain_set = None
+                chain_dict = None
 
                 for filter_node in chain:
-                    if chain_set is not None and not chain_set:
+                    if chain_dict is not None and not chain_dict:
                         yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': 0})}\n\n"
                         continue
 
                     yield f"data: {json.dumps({'type': 'start', 'filter_id': filter_node.id})}\n\n"
 
-                    result_set = await self._execute_filter(
-                        filter_node, current_tickers=chain_set
+                    result_dict = await self._execute_filter(
+                        filter_node, current_tickers=chain_dict
                     )
 
-                    if chain_set is None:
-                        chain_set = result_set
+                    if chain_dict is None:
+                        chain_dict = result_dict
                     else:
-                        chain_set = chain_set & result_set
+                        new_dict = {}
+                        for ticker, values in chain_dict.items():
+                            if ticker in result_dict:
+                                new_dict[ticker] = values | result_dict[ticker]
+                        chain_dict = new_dict
 
-                    yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': len(chain_set)})}\n\n"
+                    yield f"data: {json.dumps({'type': 'progress', 'filter_id': filter_node.id, 'remaining': len(chain_dict)})}\n\n"
 
-                if chain_set:
-                    final_set = final_set | chain_set
+                if chain_dict:
+                    for ticker, values in chain_dict.items():
+                        if ticker in final_dict:
+                            final_dict[ticker] = final_dict[ticker] | values
+                        else:
+                            final_dict[ticker] = values
 
-            items = self.get_ticker_names(final_set)
+            items = self.get_ticker_names(final_dict)
             yield f"data: {json.dumps({'type': 'complete', 'items': items})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     async def _execute_filter(
-        self, filter_node: FilterNode, current_tickers: set[str] | None = None
-    ) -> set[str]:
-        """단일 필터 모듈을 호출하여 티커 집합(Set)을 반환합니다."""
+        self,
+        filter_node: FilterNode,
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
+        """단일 필터 모듈을 호출하여 딕셔너리를 반환합니다."""
         handler = self.filter_handlers.get(filter_node.type)
         if not handler:
             raise ValueError(f"지원하지 않는 필터 타입입니다: {filter_node.type}")
-        return await handler(filter_node.params, current_tickers)
+        return await handler(filter_node.id, filter_node.params, current_tickers)
 
-    def get_ticker_names(self, tickers: set[str]) -> list:
-        """티커 Set을 받아 이름과 각종 지표가 포함된 딕셔너리 리스트로 변환합니다."""
+    def get_ticker_names(self, tickers: dict[str, dict[str, float]]) -> list:
+        """티커 딕셔너리를 받아 이름과 각종 지표가 포함된 딕셔너리 리스트로 변환합니다."""
         if not tickers:
             return []
 
@@ -185,7 +205,7 @@ class ScreenerEngine:
         conn = connect_sqlite()
         cursor = conn.cursor()
         try:
-            placeholders = ",".join("?" for _ in tickers)
+            placeholders = ",".join("?" for _ in tickers.keys())
             query = f"""
             SELECT
                 s.ticker,
@@ -205,12 +225,12 @@ class ScreenerEngine:
             FROM stock_codes s
             WHERE s.ticker IN ({placeholders})
             """
-            cursor.execute(query, tuple(tickers))
+            cursor.execute(query, tuple(tickers.keys()))
             rows = cursor.fetchall()
 
             results = []
             for r in rows:
-                ticker, name, market, market_cap, close, amount, prev_close = r
+                ticker_code, name, market, market_cap, close, amount, prev_close = r
 
                 change_rate = None
                 if close is not None and prev_close is not None and prev_close != 0:
@@ -218,13 +238,14 @@ class ScreenerEngine:
 
                 results.append(
                     {
-                        "ticker": ticker,
+                        "ticker": ticker_code,
                         "name": name,
                         "market": market,
                         "market_cap": market_cap,
                         "close": close,
                         "amount": amount,
                         "change_rate": change_rate,
+                        "filter_values": tickers.get(ticker_code, {}),
                     }
                 )
             return results
@@ -237,13 +258,16 @@ class ScreenerEngine:
     # ==========================================
 
     async def _handle_ma_alignment(
-        self, params: dict[str, Any], current_tickers: set[str] | None = None
-    ) -> set[str]:
+        self,
+        filter_id: str,
+        params: dict[str, Any],
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
         """다중 이평선 정배열 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
         duration = params.get("duration", 1)
         if not lines or len(lines) < 2:
-            return set()
+            return {}
 
         is_daily = any("daily" in line for line in lines)
         table_name = "daily_ma" if is_daily else "minute_ma"
@@ -251,7 +275,8 @@ class ScreenerEngine:
 
         # 컬럼명 매핑 (예: ma_daily_5 -> ma5)
         mapped = [
-            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line for line in lines
+            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line
+            for line in lines
         ]
         max_candles = 390 if not is_daily else 300
         if duration > max_candles:
@@ -261,6 +286,9 @@ class ScreenerEngine:
         trend_select = (
             f"CASE WHEN {' AND '.join(conds)} THEN 1 ELSE 0 END as is_aligned"
         )
+        max_func = f"MAX({', '.join(mapped)})"
+        min_func = f"MIN({', '.join(mapped)})"
+        val_select = f"(({max_func} - {min_func}) * 100.0 / NULLIF({min_func}, 0)) as alignment_diff"
 
         from core.database import connect_ma_db, connect_sqlite
 
@@ -269,13 +297,14 @@ class ScreenerEngine:
             rows = conn.execute(
                 "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
             ).fetchall()
-            current_tickers = {r["ticker"] for r in rows}
+            current_tickers = {r["ticker"]: {} for r in rows}
             conn.close()
 
         if not current_tickers:
-            return set()
-        placeholders = ", ".join("?" for _ in current_tickers)
-        params = tuple(current_tickers)
+            return {}
+
+        placeholders = ", ".join("?" for _ in current_tickers.keys())
+        query_params = tuple(current_tickers.keys())
 
         query = f"""
         WITH recent_ma AS (
@@ -286,28 +315,34 @@ class ScreenerEngine:
             ) WHERE rn <= {duration}
         ),
         trend AS (
-            SELECT *, {trend_select} FROM recent_ma
+            SELECT *, {trend_select}, {val_select} FROM recent_ma
             WHERE {" AND ".join(f"{col} IS NOT NULL" for col in mapped)}
         )
-        SELECT ticker FROM trend
+        SELECT ticker, AVG(alignment_diff) as avg_diff FROM trend
         GROUP BY ticker HAVING SUM(is_aligned) = {duration};
         """
         ma_conn = connect_ma_db()
         try:
-            return {r[0] for r in ma_conn.execute(query, params).fetchall()}
+            return {
+                r[0]: {filter_id: round(r[1], 4)}
+                for r in ma_conn.execute(query, query_params).fetchall()
+            }
         finally:
             ma_conn.close()
 
     async def _handle_ma_cross(
-        self, params: dict[str, Any], current_tickers: set[str] | None = None
-    ) -> set[str]:
+        self,
+        filter_id: str,
+        params: dict[str, Any],
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
         """이평선 크로스 판별 필터 (In-Memory MA 조회)"""
         short_line = params.get("short_line")
         long_line = params.get("long_line")
         within = params.get("within", 1)
         direction = params.get("direction", "golden")
         if direction not in ("golden", "dead") or not short_line or not long_line:
-            return set()
+            return {}
 
         is_daily = "daily" in short_line or "daily" in long_line
         table_name = "daily_ma" if is_daily else "minute_ma"
@@ -332,9 +367,15 @@ class ScreenerEngine:
             cross_cond = (
                 f"(prev_{s_col} <= prev_{l_col} AND curr_{s_col} > curr_{l_col})"
             )
+            cross_val = (
+                f"((curr_{s_col} - curr_{l_col}) * 100.0 / NULLIF(curr_{l_col}, 0))"
+            )
         else:
             cross_cond = (
                 f"(prev_{s_col} >= prev_{l_col} AND curr_{s_col} < curr_{l_col})"
+            )
+            cross_val = (
+                f"((curr_{l_col} - curr_{s_col}) * 100.0 / NULLIF(curr_{s_col}, 0))"
             )
 
         from core.database import connect_ma_db, connect_sqlite
@@ -344,13 +385,13 @@ class ScreenerEngine:
             rows = conn.execute(
                 "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
             ).fetchall()
-            current_tickers = {r["ticker"] for r in rows}
+            current_tickers = {r["ticker"]: {} for r in rows}
             conn.close()
 
         if not current_tickers:
-            return set()
-        placeholders = ", ".join("?" for _ in current_tickers)
-        params = tuple(current_tickers)
+            return {}
+        placeholders = ", ".join("?" for _ in current_tickers.keys())
+        query_params = tuple(current_tickers.keys())
 
         query = f"""
         WITH recent_ma AS (
@@ -367,7 +408,7 @@ class ScreenerEngine:
                    LEAD({l_col}, 1) OVER(PARTITION BY ticker ORDER BY rn ASC) as prev_{l_col}
             FROM recent_ma
         )
-        SELECT ticker FROM lagged_ma
+        SELECT ticker, MAX({cross_val}) as cross_diff FROM lagged_ma
         WHERE rn <= {within}
           AND curr_{s_col} IS NOT NULL AND prev_{s_col} IS NOT NULL
           AND curr_{l_col} IS NOT NULL AND prev_{l_col} IS NOT NULL
@@ -376,26 +417,33 @@ class ScreenerEngine:
         """
         ma_conn = connect_ma_db()
         try:
-            return {r[0] for r in ma_conn.execute(query, params).fetchall()}
+            return {
+                r[0]: {filter_id: round(r[1], 4)}
+                for r in ma_conn.execute(query, query_params).fetchall()
+            }
         finally:
             ma_conn.close()
 
     async def _handle_ma_convergence_consolidation(
-        self, params: dict[str, Any], current_tickers: set[str] | None = None
-    ) -> set[str]:
+        self,
+        filter_id: str,
+        params: dict[str, Any],
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
         """수렴 횡보(상태 유지) 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
         duration = params.get("duration", 1)
         if not lines or len(lines) < 2:
-            return set()
+            return {}
 
         is_daily = any("daily" in line for line in lines)
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
         mapped = [
-            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line for line in lines
+            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line
+            for line in lines
         ]
         max_candles = 390 if not is_daily else 300
         if duration > max_candles:
@@ -403,7 +451,8 @@ class ScreenerEngine:
 
         max_func = f"MAX({', '.join(mapped)})"
         min_func = f"MIN({', '.join(mapped)})"
-        convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
+        diff_val = f"(({max_func} - {min_func}) * 100.0 / NULLIF({min_func}, 0))"
+        convergence_cond = f"( {diff_val} <= {threshold} )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
         from core.database import connect_ma_db, connect_sqlite
@@ -413,13 +462,13 @@ class ScreenerEngine:
             rows = conn.execute(
                 "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
             ).fetchall()
-            current_tickers = {r["ticker"] for r in rows}
+            current_tickers = {r["ticker"]: {} for r in rows}
             conn.close()
 
         if not current_tickers:
-            return set()
-        placeholders = ", ".join("?" for _ in current_tickers)
-        params = tuple(current_tickers)
+            return {}
+        placeholders = ", ".join("?" for _ in current_tickers.keys())
+        query_params = tuple(current_tickers.keys())
 
         query = f"""
         WITH recent_ma AS (
@@ -430,34 +479,41 @@ class ScreenerEngine:
             ) WHERE rn <= {duration}
         ),
         trend AS (
-            SELECT *, {trend_select} FROM recent_ma
+            SELECT *, {trend_select}, {diff_val} as convergence_diff FROM recent_ma
             WHERE {" AND ".join(f"{col} IS NOT NULL" for col in mapped)}
         )
-        SELECT ticker FROM trend
+        SELECT ticker, AVG(convergence_diff) as avg_diff FROM trend
         GROUP BY ticker HAVING SUM(is_converged) = {duration};
         """
         ma_conn = connect_ma_db()
         try:
-            return {r[0] for r in ma_conn.execute(query, params).fetchall()}
+            return {
+                r[0]: {filter_id: round(r[1], 4)}
+                for r in ma_conn.execute(query, query_params).fetchall()
+            }
         finally:
             ma_conn.close()
 
     async def _handle_ma_convergence_point(
-        self, params: dict[str, Any], current_tickers: set[str] | None = None
-    ) -> set[str]:
+        self,
+        filter_id: str,
+        params: dict[str, Any],
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
         """수렴 지점 발생 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
         within = params.get("within", 1)
         if not lines or len(lines) < 2:
-            return set()
+            return {}
 
         is_daily = any("daily" in line for line in lines)
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
         mapped = [
-            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line for line in lines
+            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line
+            for line in lines
         ]
         max_candles = 390 if not is_daily else 300
         if within > max_candles:
@@ -465,7 +521,8 @@ class ScreenerEngine:
 
         max_func = f"MAX({', '.join(mapped)})"
         min_func = f"MIN({', '.join(mapped)})"
-        convergence_cond = f"( ({max_func} - {min_func}) * 1.0 / NULLIF({min_func}, 0) <= {threshold / 100.0} )"
+        diff_val = f"(({max_func} - {min_func}) * 100.0 / NULLIF({min_func}, 0))"
+        convergence_cond = f"( {diff_val} <= {threshold} )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
         from core.database import connect_ma_db, connect_sqlite
@@ -475,13 +532,13 @@ class ScreenerEngine:
             rows = conn.execute(
                 "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
             ).fetchall()
-            current_tickers = {r["ticker"] for r in rows}
+            current_tickers = {r["ticker"]: {} for r in rows}
             conn.close()
 
         if not current_tickers:
-            return set()
-        placeholders = ", ".join("?" for _ in current_tickers)
-        params = tuple(current_tickers)
+            return {}
+        placeholders = ", ".join("?" for _ in current_tickers.keys())
+        query_params = tuple(current_tickers.keys())
 
         query = f"""
         WITH recent_ma AS (
@@ -492,22 +549,25 @@ class ScreenerEngine:
             ) WHERE rn <= {within}
         ),
         trend AS (
-            SELECT *, {trend_select} FROM recent_ma
+            SELECT *, {trend_select}, {diff_val} as convergence_diff FROM recent_ma
             WHERE {" AND ".join(f"{col} IS NOT NULL" for col in mapped)}
         )
-        SELECT ticker FROM trend
+        SELECT ticker, MIN(convergence_diff) as min_diff FROM trend
         WHERE is_converged = 1
         GROUP BY ticker;
         """
         ma_conn = connect_ma_db()
         try:
-            return {r[0] for r in ma_conn.execute(query, params).fetchall()}
+            return {
+                r[0]: {filter_id: round(r[1], 4)}
+                for r in ma_conn.execute(query, query_params).fetchall()
+            }
         finally:
             ma_conn.close()
 
     async def _fetch_investor_rank(
-        self, etc_cls_code: str, limit: int = 30
-    ) -> set[str]:
+        self, etc_cls_code: str, filter_id: str, limit: int = 30
+    ) -> dict[str, dict[str, float]]:
         """
         KIS OpenAPI (FHPTJ04400000) 가집계 랭킹 API 호출.
         etc_cls_code: "1" (외국인), "2" (기관계)
@@ -543,33 +603,43 @@ class ScreenerEngine:
                 if ticker:
                     tickers.append(ticker)
 
-            # KIS API "국내기관_외국인 매매종목가집계"는 상위 30건으로 고정되어 있으며 연속조회를 지원하지 않습니다.
-            # 중복 제거 후 반환 (단일 호출로 30건)
             unique_tickers = []
             for t in tickers:
                 if t not in unique_tickers:
                     unique_tickers.append(t)
 
-            return set(unique_tickers[:limit])
+            # API 호출 순위는 단순 0.0 부여 (상위 30건에만 드는 게 목적)
+            return {t: {filter_id: 0.0} for t in unique_tickers[:limit]}
+        return {}
 
     async def _handle_foreign_net_buy_rank(
-        self, params: dict[str, Any], current_tickers: set[str] | None = None
-    ) -> set[str]:
+        self,
+        filter_id: str,
+        params: dict[str, Any],
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
         """외국인 순매수 상위 필터"""
         limit = params.get("limit", 30)
-        res = await self._fetch_investor_rank(etc_cls_code="1", limit=limit)
+        res = await self._fetch_investor_rank(
+            etc_cls_code="1", filter_id=filter_id, limit=limit
+        )
         if current_tickers is not None:
-            return res & current_tickers
+            return {t: res[t] for t in res if t in current_tickers}
         return res
 
     async def _handle_inst_net_buy_rank(
-        self, params: dict[str, Any], current_tickers: set[str] | None = None
-    ) -> set[str]:
+        self,
+        filter_id: str,
+        params: dict[str, Any],
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
         """기관 순매수 상위 필터"""
         limit = params.get("limit", 30)
-        res = await self._fetch_investor_rank(etc_cls_code="2", limit=limit)
+        res = await self._fetch_investor_rank(
+            etc_cls_code="2", filter_id=filter_id, limit=limit
+        )
         if current_tickers is not None:
-            return res & current_tickers
+            return {t: res[t] for t in res if t in current_tickers}
         return res
 
 
