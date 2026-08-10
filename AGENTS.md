@@ -70,7 +70,7 @@
 - **스크리너 AST 파이프라인 최적화 (Big O Heuristics)**: 클라이언트의 조건식(AST)은 서버 메모리 보호 및 성능 극대화를 위해 반드시 `OR` 기준으로 분기(Split) 후, 각 `AND` 체인 내부를 **휴리스틱 비용(Cost)** 기준으로 정렬(가벼운 필터 우선)하여 실행한다. In-Memory MA 구조 하에서는 윈도우 크기(`max_window`)가 아닌 실제 스캔 행 수(`duration`)만을 기반으로 DB 비용을 정확히 산정해야 한다. API 호출 필터(외국인/기관 매수 등)는 결과 셋을 30개로 극적으로 줄여주므로 항상 Cost 0 (최우선순위)으로 취급한다. 중간 교집합 연산 시 `Set`이 빈약해지면 후속 연산을 즉시 중단(Short-circuit)한다. (참고: `ADR-024`, `ADR-027`)
 - **로깅 규칙**: 스케줄러 및 백그라운드 작업의 로깅은 표준 `info` 대신 반드시 커스텀 레벨인 `logger.sched(...)`를 사용하여 로그 가독성을 유지한다.
 - **API 래퍼 사용**: KIS OpenAPI 호출 결과는 반드시 사전에 정의된 `APIResp` 객체(내부 `DotDict` 포함)로 래핑하여 파이썬 점 표기법(Dot-notation)으로 일관성 있게 다룬다.
-- **UI/UX 원칙 (Smart Defaults)**: 강제 제약(Systematic restriction)보다는 사용자의 편의를 돕는 '스마트 디폴트' 패턴을 지향한다. (예: 타임프레임 전환 시 관련 이평선 자동 On/Off)
+- **UI/UX 원칙 (Smart Defaults & Mobile-First)**: 강제 제약(Systematic restriction)보다는 사용자의 편의를 돕는 '스마트 디폴트' 패턴을 지향한다. (예: UI는 직관적인 숫자(5, 10)만 노출하고 타임프레임에 맞춰 백엔드 키를 자동 매핑). 또한 모바일 사용성을 위해 불필요한 중복 테두리(Double-border)를 걷어내고 `ResizeObserver`를 통해 DOM의 유동적 크기에 차트가 대응하도록 설계한다.
     - **테스트 환경 격리 (DB Routing)**: 무결성 검증이나 파괴적인 통합 테스트(삭제/복구)를 수행할 때 운영 DB(`trading.db`)를 오염시키지 않도록, `contextvars.ContextVar`(`test_db_var`)를 활용해 런타임에 동적으로 `test_trading.db`로 라우팅하는 패턴을 반드시 준수한다.
   - ⚠️ 단, 단순 상태 점검을 위한 순수 조회(Read-only) 모니터링 API(`/admin/live/...`)는 우회 없이 실제 운영 DB를 직접 조회한다.
 
