@@ -5,7 +5,7 @@ import { ChartDataResponse } from "../../types/market";
 import { getChartData } from "../../lib/api";
 import { aggregateCandles, aggregateDailyCandles, extractLineSeriesData } from "../../lib/chart-utils";
 import LightweightChart, { MA_CONFIGS } from "./LightweightChart";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -116,18 +116,15 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
   if (!data) return null;
 
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle className="text-2xl flex items-center gap-4">
-          <span>{data.name}</span>
-          <span className="text-sm font-normal text-muted-foreground">{data.ticker}</span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-6">
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="text-sm font-semibold text-muted-foreground w-20">Timeframe</span>
-            <div className="flex gap-2 border-r pr-4">
+    <div className="w-full h-full flex flex-col">
+      <div className="flex items-center gap-4 mb-4 sm:mb-6 pr-8">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">{data.name}</h2>
+        <span className="text-sm sm:text-base font-normal text-muted-foreground">{data.ticker}</span>
+      </div>
+      <div className="flex flex-col gap-4 sm:gap-6 flex-1 min-h-0">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <span className="text-sm font-semibold text-muted-foreground sm:w-20">Timeframe</span>
+            <div className="flex flex-wrap items-center gap-2">
               {MINUTE_TIMEFRAMES.map(tf => (
                 <Button 
                   key={tf.value} 
@@ -138,8 +135,7 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
                   {tf.label}
                 </Button>
               ))}
-            </div>
-            <div className="flex gap-2">
+              <div className="hidden sm:block w-[1px] h-6 bg-border mx-1"></div>
               {DAILY_TIMEFRAMES.map(tf => (
                 <Button 
                   key={tf.value} 
@@ -153,8 +149,8 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
             </div>
           </div>
           
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="text-sm font-semibold text-muted-foreground w-20">Indicators</span>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <span className="text-sm font-semibold text-muted-foreground sm:w-20">Indicators</span>
             <div className="flex flex-wrap gap-4 items-center">
               {INDICATORS.map((indicator) => (
                 <div key={indicator.id} className="flex items-center space-x-2">
@@ -175,12 +171,11 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
             </div>
           </div>
 
-          <div className="border rounded-md overflow-hidden bg-background">
+          <div className="border rounded-md overflow-hidden bg-background w-full h-[350px] sm:h-[600px] relative">
             {loading && <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10 animate-pulse">Loading...</div>}
             <LightweightChart candleData={candleData} lineData={lineData} visibleLines={visibleLines} />
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
   );
 }

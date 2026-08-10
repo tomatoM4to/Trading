@@ -34,10 +34,6 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    const handleResize = () => {
-      chartRef.current?.applyOptions({ width: chartContainerRef.current?.clientWidth });
-    };
-
     const chart = createChart(chartContainerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
@@ -50,7 +46,7 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
         horzLines: { color: "rgba(255, 255, 255, 0.1)" },
       },
       width: chartContainerRef.current.clientWidth,
-      height: 600,
+      height: chartContainerRef.current.clientHeight || 400,
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
@@ -96,10 +92,17 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
       seriesRef.current[key] = lineSeries;
     });
 
-    window.addEventListener("resize", handleResize);
+    const resizeObserver = new ResizeObserver(entries => {
+      if (entries.length === 0 || entries[0].target !== chartContainerRef.current) {
+        return;
+      }
+      const newRect = entries[0].contentRect;
+      chart.applyOptions({ height: newRect.height, width: newRect.width });
+    });
+    resizeObserver.observe(chartContainerRef.current);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
     };
@@ -139,5 +142,5 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
     });
   }, [candleData, lineData, visibleLines]);
 
-  return <div ref={chartContainerRef} style={{ width: "100%", height: "600px" }} />;
+  return <div ref={chartContainerRef} style={{ width: "100%", height: "100%" }} />;
 }
