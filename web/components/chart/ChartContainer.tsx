@@ -5,7 +5,7 @@ import { ChartDataResponse } from "../../types/market";
 import { getChartData } from "../../lib/api";
 import { aggregateCandles, aggregateDailyCandles, extractLineSeriesData } from "../../lib/chart-utils";
 import LightweightChart, { MA_CONFIGS } from "./LightweightChart";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -25,43 +25,48 @@ const DAILY_TIMEFRAMES = [
   { label: "1M", value: "1M" },
 ];
 
+const INDICATORS = [
+  { id: "5", label: "5", color: "#ec407a" },
+  { id: "10", label: "10", color: "#29b6f6" },
+  { id: "20", label: "20", color: "#ffa726" },
+  { id: "60", label: "60", color: "#66bb6a" },
+  { id: "120", label: "120", color: "#ab47bc" },
+  { id: "200", label: "200", color: "#ff7043" },
+];
+
 export default function ChartContainer({ ticker }: { ticker: string }) {
   const [data, setData] = useState<ChartDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState<string>("1");
-  const [visibleMAs, setVisibleMAs] = useState<Record<string, boolean>>({
-    ma5: true,
-    ma10: true,
-    ma20: true,
-    ma60: true,
-    ma120: true,
-    ma200: true,
-    ma_daily_5: false,
-    ma_daily_20: false,
-    ma_daily_60: false,
-    ma_daily_120: false,
-    ma_daily_200: false,
+  const [activeIndicators, setActiveIndicators] = useState<Record<string, boolean>>({
+    "5": true,
+    "10": true,
+    "20": true,
+    "60": true,
+    "120": true,
+    "200": true,
   });
 
   const isDailyTF = DAILY_TIMEFRAMES.some(tf => tf.value === timeframe);
 
-  useEffect(() => {
-    setVisibleMAs(prev => ({
-      ...prev,
-      ma5: !isDailyTF,
-      ma10: !isDailyTF,
-      ma20: !isDailyTF,
-      ma60: !isDailyTF,
-      ma120: !isDailyTF,
-      ma200: !isDailyTF,
-      ma_daily_5: isDailyTF,
-      ma_daily_20: isDailyTF,
-      ma_daily_60: isDailyTF,
-      ma_daily_120: isDailyTF,
-      ma_daily_200: isDailyTF,
-    }));
-  }, [isDailyTF]);
+  const visibleLines = useMemo(() => {
+    const result: Record<string, boolean> = {};
+    Object.keys(MA_CONFIGS).forEach(key => {
+      result[key] = false;
+    });
+    
+    Object.keys(activeIndicators).forEach(num => {
+      if (activeIndicators[num]) {
+        if (isDailyTF) {
+          result[`ma_daily_${num}`] = true;
+        } else {
+          result[`ma${num}`] = true;
+        }
+      }
+    });
+    return result;
+  }, [activeIndicators, isDailyTF]);
 
   useEffect(() => {
     async function fetchData() {
@@ -103,7 +108,7 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
   }, [data, timeframe]);
 
   const toggleMA = (key: string) => {
-    setVisibleMAs(prev => ({ ...prev, [key]: !prev[key] }));
+    setActiveIndicators(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   if (loading && !data) return <div className="p-8 text-center text-lg animate-pulse">Loading chart data...</div>;
@@ -111,18 +116,15 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
   if (!data) return null;
 
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle className="text-2xl flex items-center gap-4">
-          <span>{data.name}</span>
-          <span className="text-sm font-normal text-muted-foreground">{data.ticker}</span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-6">
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="text-sm font-semibold text-muted-foreground w-20">Timeframe</span>
-            <div className="flex gap-2 border-r pr-4">
+    <div className="w-full h-full flex flex-col">
+      <div className="flex items-center gap-4 mb-4 sm:mb-6 pr-8">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">{data.name}</h2>
+        <span className="text-sm sm:text-base font-normal text-muted-foreground">{data.ticker}</span>
+      </div>
+      <div className="flex flex-col gap-4 sm:gap-6 flex-1 min-h-0">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <span className="text-sm font-semibold text-muted-foreground sm:w-20">Timeframe</span>
+            <div className="flex flex-wrap items-center gap-2">
               {MINUTE_TIMEFRAMES.map(tf => (
                 <Button 
                   key={tf.value} 
@@ -133,8 +135,7 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
                   {tf.label}
                 </Button>
               ))}
-            </div>
-            <div className="flex gap-2">
+              <div className="hidden sm:block w-[1px] h-6 bg-border mx-1"></div>
               {DAILY_TIMEFRAMES.map(tf => (
                 <Button 
                   key={tf.value} 
@@ -148,34 +149,33 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
             </div>
           </div>
           
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="text-sm font-semibold text-muted-foreground w-20">Indicators</span>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <span className="text-sm font-semibold text-muted-foreground sm:w-20">Indicators</span>
             <div className="flex flex-wrap gap-4 items-center">
-              {Object.entries(MA_CONFIGS).map(([key, config]) => (
-                <div key={key} className="flex items-center space-x-2">
+              {INDICATORS.map((indicator) => (
+                <div key={indicator.id} className="flex items-center space-x-2">
                   <Checkbox 
-                    id={key} 
-                    checked={visibleMAs[key] || false} 
-                    onCheckedChange={() => toggleMA(key)} 
+                    id={indicator.id} 
+                    checked={activeIndicators[indicator.id] || false} 
+                    onCheckedChange={() => toggleMA(indicator.id)} 
                   />
                   <Label 
-                    htmlFor={key} 
+                    htmlFor={indicator.id} 
                     className="font-medium cursor-pointer" 
-                    style={{ color: config.color }}
+                    style={{ color: indicator.color }}
                   >
-                    {config.title}
+                    {indicator.label}
                   </Label>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="border rounded-md overflow-hidden bg-background">
+          <div className="border rounded-md overflow-hidden bg-background w-full h-[350px] sm:h-[600px] relative">
             {loading && <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10 animate-pulse">Loading...</div>}
-            <LightweightChart candleData={candleData} lineData={lineData} visibleLines={visibleMAs} />
+            <LightweightChart candleData={candleData} lineData={lineData} visibleLines={visibleLines} />
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
   );
 }

@@ -5,17 +5,18 @@ import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickSeries, LineS
 import { AggregatedCandle, LineDataPoint } from "../../lib/chart-utils";
 
 export const MA_CONFIGS: Record<string, { color: string; title: string; lineWidth?: number }> = {
-  ma5: { color: "#ec407a", title: "5m", lineWidth: 2 },
-  ma10: { color: "#29b6f6", title: "10m", lineWidth: 2 },
-  ma20: { color: "#ffa726", title: "20m", lineWidth: 2 },
-  ma60: { color: "#66bb6a", title: "60m", lineWidth: 2 },
-  ma120: { color: "#ab47bc", title: "120m", lineWidth: 2 },
-  ma200: { color: "#ff7043", title: "200m", lineWidth: 2 },
-  ma_daily_5: { color: "#4caf50", title: "5d", lineWidth: 2 },
-  ma_daily_20: { color: "#2196f3", title: "20d", lineWidth: 2 },
-  ma_daily_60: { color: "#3f51b5", title: "60d", lineWidth: 2 },
-  ma_daily_120: { color: "#9c27b0", title: "120d", lineWidth: 2 },
-  ma_daily_200: { color: "#f06292", title: "200d", lineWidth: 2 },
+  ma5: { color: "#ec407a", title: "5", lineWidth: 2 },
+  ma10: { color: "#29b6f6", title: "10", lineWidth: 2 },
+  ma20: { color: "#ffa726", title: "20", lineWidth: 2 },
+  ma60: { color: "#66bb6a", title: "60", lineWidth: 2 },
+  ma120: { color: "#ab47bc", title: "120", lineWidth: 2 },
+  ma200: { color: "#ff7043", title: "200", lineWidth: 2 },
+  ma_daily_5: { color: "#ec407a", title: "5", lineWidth: 2 },
+  ma_daily_10: { color: "#29b6f6", title: "10", lineWidth: 2 },
+  ma_daily_20: { color: "#ffa726", title: "20", lineWidth: 2 },
+  ma_daily_60: { color: "#66bb6a", title: "60", lineWidth: 2 },
+  ma_daily_120: { color: "#ab47bc", title: "120", lineWidth: 2 },
+  ma_daily_200: { color: "#ff7043", title: "200", lineWidth: 2 },
 };
 
 interface LightweightChartProps {
@@ -33,10 +34,6 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    const handleResize = () => {
-      chartRef.current?.applyOptions({ width: chartContainerRef.current?.clientWidth });
-    };
-
     const chart = createChart(chartContainerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
@@ -49,7 +46,7 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
         horzLines: { color: "rgba(255, 255, 255, 0.1)" },
       },
       width: chartContainerRef.current.clientWidth,
-      height: 600,
+      height: chartContainerRef.current.clientHeight || 400,
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
@@ -95,10 +92,17 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
       seriesRef.current[key] = lineSeries;
     });
 
-    window.addEventListener("resize", handleResize);
+    const resizeObserver = new ResizeObserver(entries => {
+      if (entries.length === 0 || entries[0].target !== chartContainerRef.current) {
+        return;
+      }
+      const newRect = entries[0].contentRect;
+      chart.applyOptions({ height: newRect.height, width: newRect.width });
+    });
+    resizeObserver.observe(chartContainerRef.current);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
     };
@@ -138,5 +142,5 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
     });
   }, [candleData, lineData, visibleLines]);
 
-  return <div ref={chartContainerRef} style={{ width: "100%", height: "600px" }} />;
+  return <div ref={chartContainerRef} style={{ width: "100%", height: "100%" }} />;
 }
