@@ -82,7 +82,7 @@ async def process_ticker(
     ticker: str,
     last_datetime: str | None = None,
     limit_days: int = 14,
-    max_steps: int = 15,
+    max_steps: int = 7,
     priority: int = 7,
 ) -> tuple[bool, str | None]:
     """

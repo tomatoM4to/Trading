@@ -176,15 +176,15 @@ class SystemScheduler:
                 try:
                     cursor = conn.cursor()
 
-                    # 1. 일봉 GC: 300일 경과 데이터 일괄 삭제 (YYYYMMDD 형식 비교)
+                    # 1. 일봉 GC: 500일 경과 데이터 일괄 삭제 (YYYYMMDD 형식 비교)
                     cursor.execute(
-                        "DELETE FROM daily_ohlcv WHERE date < strftime('%Y%m%d', 'now', 'localtime', '-300 days')"
+                        "DELETE FROM daily_ohlcv WHERE date < strftime('%Y%m%d', 'now', 'localtime', '-500 days')"
                     )
                     total_daily_deleted = cursor.rowcount
 
-                    # 2. 분봉 GC: 7일 경과 데이터 일괄 삭제 (YYYYMMDD 형식 비교)
+                    # 2. 분봉 GC: 2일 경과 데이터 일괄 삭제 (YYYYMMDD 형식 비교)
                     cursor.execute(
-                        "DELETE FROM minute_ohlcv WHERE date < strftime('%Y%m%d', 'now', 'localtime', '-7 days')"
+                        "DELETE FROM minute_ohlcv WHERE date < strftime('%Y%m%d', 'now', 'localtime', '-2 days')"
                     )
                     total_minute_deleted = cursor.rowcount
 
