@@ -1,7 +1,7 @@
 # ADR-030: 데이터 보존 주기(GC) 및 콜드스타트 범위 일치 최적화
 
 ## Status
-Accepted
+Superseded by ADR-031
 
 ## Date
 2026-08-12

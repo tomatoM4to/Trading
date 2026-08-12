@@ -1,8 +1,8 @@
-- [x] Task: Limit minute data cold start to 2 days
-  - Acceptance: `max_steps` in `process_ticker` is changed to 7.
-  - Verify: Check `app/tasks/minute_ohlcv_scheduler.py` visually and run `ruff check`.
-  - Files: `app/tasks/minute_ohlcv_scheduler.py`
-- [x] Task: Update GC deletion thresholds
-  - Acceptance: GC for minute is `-2 days` and daily is `-500 days`.
-  - Verify: Check `app/core/scheduler.py` visually and run `ruff check`.
+- [x] Task: Update GC schedule to 4 AM
+  - Acceptance: `hour=4` is used for `cleanup_ohlcv_gc_2300` job (maybe rename id to `cleanup_ohlcv_gc_0400`).
+  - Verify: Check `app/core/scheduler.py`.
+  - Files: `app/core/scheduler.py`
+- [x] Task: Implement Intelligent GC Logic
+  - Acceptance: `cleanup_ohlcv_job` uses smart trigger and TEMP TABLE logic, and `datetime` is imported.
+  - Verify: Check `app/core/scheduler.py` and run `ruff check`.
   - Files: `app/core/scheduler.py`
