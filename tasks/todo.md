@@ -1,8 +1,16 @@
-- [x] Task: Update GC schedule to 4 AM
-  - Acceptance: `hour=4` is used for `cleanup_ohlcv_gc_2300` job (maybe rename id to `cleanup_ohlcv_gc_0400`).
-  - Verify: Check `app/core/scheduler.py`.
-  - Files: `app/core/scheduler.py`
-- [x] Task: Implement Intelligent GC Logic
-  - Acceptance: `cleanup_ohlcv_job` uses smart trigger and TEMP TABLE logic, and `datetime` is imported.
-  - Verify: Check `app/core/scheduler.py` and run `ruff check`.
-  - Files: `app/core/scheduler.py`
+- [x] Task: Create `app/core/state.py` and `SystemState`
+  - Acceptance: Thread-safe singleton with `acquire` context manager.
+  - Verify: Run `ruff check`.
+  - Files: `app/core/state.py`
+- [x] Task: Create `app/core/dependencies.py`
+  - Acceptance: `system_state_guard` dependency that raises 503 if unavailable, bypassing `/health`.
+  - Verify: Run `ruff check`.
+  - Files: `app/core/dependencies.py`
+- [x] Task: Update `app/main.py`
+  - Acceptance: Inject `system_state_guard` globally into `FastAPI(dependencies=[...])`.
+  - Verify: Run `ruff check`.
+  - Files: `app/main.py`
+- [x] Task: Protect Heavy Background Tasks
+  - Acceptance: Wrap GC, Sync, and Bootstrap tasks in `with system_state.acquire(...)`.
+  - Verify: Run `ruff check`.
+  - Files: `app/core/scheduler.py`, `app/core/bootstrap.py`

@@ -4,7 +4,16 @@
 
 ---
 
-## 1. 통신 객체 래핑 (APIResp Wrapper)
+## 1. 글로벌 시스템 방어 (System State Guard)
+
+1 OCPU/1GB RAM 환경의 한계를 극복하기 위해, 백엔드 앱 전역에 `System State Guard`라는 의존성(Dependency)이 주입되어 있습니다.
+- **Fail-fast 거절**: 새벽 시간의 지능형 GC, 콜드스타트 데이터 적재, 인메모리 DB 동기화 등 무거운 작업이 돌고 있을 때는 서버를 보호하기 위해 인입되는 모든 API 요청을 즉시 거절합니다.
+- **클라이언트 응답**: 대기열(Queue) 없이 즉시 `HTTP 503 (Service Unavailable)` 상태 코드와 함께 `{"detail": "GC 구동 중..."}` 형태의 사유 JSON을 반환합니다.
+- **예외 라우터**: 서버 로드밸런서가 인스턴스를 죽었다고 판단하지 않도록, `/health` 라우터만큼은 방어벽을 강제로 통과(bypass)시켜 항상 `200 OK`를 반환하게 설계되었습니다. (단, `/admin` 등 그 외 라우터는 얄짤없이 503을 뱉습니다.)
+
+---
+
+## 2. 통신 객체 래핑 (APIResp Wrapper)
 
 KIS OpenAPI의 JSON 응답은 깊이가 깊고 파편화되어 있습니다. 이를 내부에서 다루기 쉽도록 `APIResp` 객체와 내부 `DotDict` 헬퍼 클래스를 도입하여 점 표기법(Dot-notation)으로 접근할 수 있도록 래핑(Wrapping)합니다.
 
@@ -29,12 +38,12 @@ KIS OpenAPI의 JSON 응답은 깊이가 깊고 파편화되어 있습니다. 이
 
 ---
 
-## 2. 관리자 통합 검증 라우터 (`/admin/test`)
+## 3. 관리자 통합 검증 라우터 (`/admin/test`)
 **파일 위치:** `app/routes/admin.py`, `app/services/admin_test_service.py`
 
 배치 스케줄러가 백그라운드에서 적재하는 로직이 100% 무결한지(누락, 동기화 지연 복구 능력 등)를 실제 API 통신을 통해 통합 테스트하는 엔드포인트입니다.
 
-### 2-A. 통합 스케줄러 검증 (`/admin/test/daily_scheduler` & `/admin/test/minute_scheduler`)
+### 3-A. 통합 스케줄러 검증 (`/admin/test/daily_scheduler` & `/admin/test/minute_scheduler`)
 - **운영 환경 격리 (Test DB Routing)**:
   - 라이브 운영 DB(`trading.db`)를 건드리지 않기 위해, `test_db_var` (ContextVar)를 사용하여 런타임에 동적으로 `test_trading.db` 파일을 생성하고, 해당 API 요청 스레드에 한해서만 DB 통신을 테스트용 파일로 우회시킵니다.
 - **통합 파이프라인 시나리오**:
@@ -44,7 +53,7 @@ KIS OpenAPI의 JSON 응답은 깊이가 깊고 파편화되어 있습니다. 이
   4. **1:1 무결성(Integrity) 검증**: 최종적으로 로컬 테스트 DB에 적재된 캔들 값(시/고/저/종/거래량)과 KIS API의 최신 응답값을 실시간으로 비교(Spot Check)하여 100% 일치하는지 확인합니다.
   - 장중(09:00 ~ 15:30) 실시간 검증 시 발생하는 미세한 초 단위 지연(Delay)을 방지하기 위해, 항상 **"DB에 적재된 가장 최신 캔들의 시간"**을 기준으로 잡아 API와 비교함으로써 실시간 통신 노이즈(False Alarm)를 완벽하게 회피합니다.
 
-### 2-B. 라이브 상태 모니터링 (`/admin/live/global-status` & `/admin/live/ticker-status/{ticker}`)
+### 3-B. 라이브 상태 모니터링 (`/admin/live/global-status` & `/admin/live/ticker-status/{ticker}`)
 - **운영 환경 직접 조회**:
   - 파괴적인 통합 테스트(`/admin/test`)와 달리 `test_db_var`를 통한 우회 처리를 하지 않고 실제 운영 DB(`trading.db`)를 직접 조회합니다.
 - **읽기 전용 (Read-only)**:
@@ -55,16 +64,16 @@ KIS OpenAPI의 JSON 응답은 깊이가 깊고 파편화되어 있습니다. 이
 
 ---
 
-## 3. 퍼블릭 마켓 라우터 (`/market`)
+## 4. 퍼블릭 마켓 라우터 (`/market`)
 **파일 위치:** `app/routes/market.py`
 
 프론트엔드 대시보드(Next.js 예정) 혹은 내부 트레이딩 봇이 판단을 내리기 위해 호출하는 API입니다.
 
-### 3-A. Zero-Latency 시세 및 스크리너 조회 (`/screener/minute-breakout`)
+### 4-A. Zero-Latency 시세 및 스크리너 조회 (`/screener/minute-breakout`)
 - **작동 원리**:
   - KIS API 서버를 거치지 않고 오직 로컬 `trading.db`의 `minute_ohlcv` 테이블만을 조회합니다.
   - 1GB RAM 환경에서 Pandas로 수천 종목을 병합(`Merge`)하는 메모리 폭발을 막기 위해, **SQLite의 윈도우 함수(`AVG() OVER (PARTITION BY ticker ORDER BY date, time)`)** 등을 적극 활용하여 이동평균선 계산과 조건 필터링을 DB 엔진단에서 처리합니다.
   - 이를 통해 특정 조건(예: 거래대금 폭발, 특정 이평선 돌파)을 만족하는 주도주 리스트(Hotlist)를 수십 밀리초 내로 즉각 반환합니다.
 
-### 3-B. (추후 확장을 위한) 실시간 스트리밍
+### 4-B. (추후 확장을 위한) 실시간 스트리밍
 - 추후 프론트엔드(Next.js / React Native) 대시보드 구성을 위해 WebSocket이나 SSE(Server-Sent Events)를 통해 스크리너 결과를 실시간 알림 형태로 Push하는 기능이 추가될 예정입니다.

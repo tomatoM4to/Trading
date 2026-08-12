@@ -137,13 +137,16 @@ class SystemScheduler:
         from tasks.init_stock_codes import init_stock_codes_db
 
         try:
+            from core.state import system_state
+
             logger.sched("Starting scheduled stock codes refresh...")
-            await asyncio.to_thread(init_stock_codes_db)
-            logger.sched("Scheduled stock codes refresh completed.")
+            with system_state.acquire("마스터 데이터 동기화 중입니다."):
+                await asyncio.to_thread(init_stock_codes_db)
+                logger.sched("Scheduled stock codes refresh completed.")
 
-            from core.database import sync_memory_to_disk
+                from core.database import sync_memory_to_disk
 
-            await asyncio.to_thread(sync_memory_to_disk)
+                await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -168,6 +171,7 @@ class SystemScheduler:
         어제가 휴장일이면 스킵하며, 각 종목별 최신 거래일 기준으로 분봉 2일, 일봉 500일 유지.
         """
         from core.database import connect_sqlite
+        from core.state import system_state
 
         try:
             logger.sched("Starting OHLCV intelligent garbage collection...")
@@ -179,13 +183,19 @@ class SystemScheduler:
 
                     # 1. 스마트 트리거: 어제 장이 열렸는지 판별
                     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-                    cursor.execute("SELECT 1 FROM daily_ohlcv WHERE date = ? LIMIT 1", (yesterday,))
+                    cursor.execute(
+                        "SELECT 1 FROM daily_ohlcv WHERE date = ? LIMIT 1", (yesterday,)
+                    )
                     if not cursor.fetchone():
-                        logger.sched(f"어제({yesterday})는 휴장일이므로 GC를 스킵합니다.")
+                        logger.sched(
+                            f"어제({yesterday})는 휴장일이므로 GC를 스킵합니다."
+                        )
                         return 0, 0
 
                     # 2. 분봉 지능형 GC (2영업일 유지)
-                    cursor.execute("CREATE TEMP TABLE IF NOT EXISTS gc_minute_thresholds (ticker TEXT PRIMARY KEY, threshold_date INTEGER) STRICT")
+                    cursor.execute(
+                        "CREATE TEMP TABLE IF NOT EXISTS gc_minute_thresholds (ticker TEXT PRIMARY KEY, threshold_date INTEGER) STRICT"
+                    )
                     cursor.execute("DELETE FROM gc_minute_thresholds")
                     cursor.execute("""
                         INSERT INTO gc_minute_thresholds (ticker, threshold_date)
@@ -204,7 +214,9 @@ class SystemScheduler:
                     total_minute_deleted = cursor.rowcount
 
                     # 3. 일봉 지능형 GC (500영업일 유지)
-                    cursor.execute("CREATE TEMP TABLE IF NOT EXISTS gc_daily_thresholds (ticker TEXT PRIMARY KEY, threshold_date INTEGER) STRICT")
+                    cursor.execute(
+                        "CREATE TEMP TABLE IF NOT EXISTS gc_daily_thresholds (ticker TEXT PRIMARY KEY, threshold_date INTEGER) STRICT"
+                    )
                     cursor.execute("DELETE FROM gc_daily_thresholds")
                     cursor.execute("""
                         INSERT INTO gc_daily_thresholds (ticker, threshold_date)
@@ -227,14 +239,15 @@ class SystemScheduler:
                 finally:
                     conn.close()
 
-            daily_del, minute_del = await asyncio.to_thread(_run_gc)
-            logger.sched(
-                f"OHLCV GC completed. Deleted daily: {daily_del} rows, minute: {minute_del} rows."
-            )
+            with system_state.acquire("지능형 가비지 컬렉터 구동 중입니다."):
+                daily_del, minute_del = await asyncio.to_thread(_run_gc)
+                logger.sched(
+                    f"OHLCV GC completed. Deleted daily: {daily_del} rows, minute: {minute_del} rows."
+                )
 
-            from core.database import sync_memory_to_disk
+                from core.database import sync_memory_to_disk
 
-            await asyncio.to_thread(sync_memory_to_disk)
+                await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -242,17 +255,19 @@ class SystemScheduler:
 
     async def run_daily_ohlcv_job(self) -> None:
         """오후 4시 정규 일봉 데이터 업데이트 Job."""
+        from core.state import system_state
         from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
 
         try:
             logger.sched("Starting scheduled daily OHLCV update (KOSPI & KOSDAQ)...")
-            await run_daily_ohlcv_scheduler("KOSPI")
-            await run_daily_ohlcv_scheduler("KOSDAQ")
-            logger.sched("Scheduled daily OHLCV update completed.")
+            with system_state.acquire("정규 일봉 데이터 업데이트 중입니다."):
+                await run_daily_ohlcv_scheduler("KOSPI")
+                await run_daily_ohlcv_scheduler("KOSDAQ")
+                logger.sched("Scheduled daily OHLCV update completed.")
 
-            from core.database import sync_memory_to_disk
+                from core.database import sync_memory_to_disk
 
-            await asyncio.to_thread(sync_memory_to_disk)
+                await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:
