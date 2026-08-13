@@ -1,16 +1,14 @@
-- [x] Task: Create `app/core/state.py` and `SystemState`
-  - Acceptance: Thread-safe singleton with `acquire` context manager.
-  - Verify: Run `ruff check`.
-  - Files: `app/core/state.py`
-- [x] Task: Create `app/core/dependencies.py`
-  - Acceptance: `system_state_guard` dependency that raises 503 if unavailable, bypassing `/health`.
-  - Verify: Run `ruff check`.
-  - Files: `app/core/dependencies.py`
-- [x] Task: Update `app/main.py`
-  - Acceptance: Inject `system_state_guard` globally into `FastAPI(dependencies=[...])`.
-  - Verify: Run `ruff check`.
-  - Files: `app/main.py`
-- [x] Task: Protect Heavy Background Tasks
-  - Acceptance: Wrap GC, Sync, and Bootstrap tasks in `with system_state.acquire(...)`.
-  - Verify: Run `ruff check`.
-  - Files: `app/core/scheduler.py`, `app/core/bootstrap.py`
+- [x] Task: Document & Setup schemas
+  - Acceptance: `docs/screener.md` is updated with API parameter documentation for `disparity_value` and `volume_peak_breakout`.
+  - Verify: Manual read of `docs/screener.md`.
+  - Files: `docs/screener.md`
+
+- [x] Task: Implement `disparity_value` AST parser
+  - Acceptance: `ScreenerEngine._handle_disparity_value` is added, properly validates `line` against `VALID_MA_PERIODS`, validates `direction` (above/below) and `threshold`, ATTACHes the MA db, and executes the SQL query.
+  - Verify: Pytest or manual testing.
+  - Files: `app/services/screener_service.py`
+
+- [x] Task: Implement `volume_peak_breakout` AST parser
+  - Acceptance: `ScreenerEngine._handle_volume_peak_breakout` is added, translates preset lookbacks (1M, 3M, 2H, 4H) into integer days/minutes, uses `ORDER BY volume DESC LIMIT 1` scalar subquery to find high price, and checks if current close > high.
+  - Verify: Pytest or manual testing.
+  - Files: `app/services/screener_service.py`

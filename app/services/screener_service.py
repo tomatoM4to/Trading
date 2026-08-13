@@ -28,6 +28,8 @@ class ScreenerEngine:
             "ma_convergence_point": self._handle_ma_convergence_point,
             "foreign_net_buy_rank": self._handle_foreign_net_buy_rank,
             "inst_net_buy_rank": self._handle_inst_net_buy_rank,
+            "disparity_value": self._handle_disparity_value,
+            "volume_peak_breakout": self._handle_volume_peak_breakout,
         }
 
     def _estimate_cost(self, filter_node: FilterNode) -> float:
@@ -40,6 +42,10 @@ class ScreenerEngine:
         # 1. API 기반 필터는 비용 0으로 가장 우선 실행
         if f_type in ("foreign_net_buy_rank", "inst_net_buy_rank"):
             return 0.0
+
+        # 1.5. 단일/서브쿼리 기반 가벼운 필터는 10으로 설정
+        if f_type in ("disparity_value", "volume_peak_breakout"):
+            return 10.0
 
         # 2. DB 기반 필터의 K, L 도출
 
@@ -561,6 +567,163 @@ class ScreenerEngine:
             }
         finally:
             ma_conn.close()
+
+    async def _handle_disparity_value(
+        self,
+        filter_id: str,
+        params: dict[str, Any],
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
+        """이격도 판별 필터 (ATTACH DATABASE 활용)"""
+        line = params.get("line")
+        threshold = params.get("threshold")
+        direction = params.get("direction")
+
+        if not line or threshold is None or direction not in ("above", "below"):
+            raise ValueError(
+                f"disparity_value 파라미터 오류: line, threshold, direction(above/below) 필수. (입력: {params})"
+            )
+
+        valid_line = self._validate_ma_line(line)
+        operator = "<=" if direction == "below" else ">="
+        threshold = float(threshold)
+
+        is_daily = "daily" in valid_line
+        main_table = "daily_ohlcv" if is_daily else "minute_ohlcv"
+        ma_table = "daily_ma" if is_daily else "minute_ma"
+        order_desc = "date DESC" if is_daily else "date DESC, time DESC"
+
+        from core.database import _MA_MEM_DB_URI, connect_sqlite
+
+        if current_tickers is None:
+            conn = connect_sqlite()
+            try:
+                rows = conn.execute(
+                    "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
+                ).fetchall()
+                current_tickers = {r["ticker"]: {} for r in rows}
+            finally:
+                conn.close()
+
+        if not current_tickers:
+            return {}
+
+        conn = connect_sqlite()
+        try:
+            conn.execute(f"ATTACH DATABASE '{_MA_MEM_DB_URI}' AS madb")
+
+            placeholders = ", ".join("?" for _ in current_tickers.keys())
+            query_params = list(current_tickers.keys())
+            query_params.extend(current_tickers.keys())
+            query_params.append(threshold)
+
+            query = f"""
+            WITH latest_main AS (
+                SELECT ticker, close
+                FROM (
+                    SELECT ticker, close,
+                           ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
+                    FROM {main_table}
+                    WHERE ticker IN ({placeholders})
+                ) WHERE rn = 1
+            ),
+            latest_ma AS (
+                SELECT ticker, {valid_line}
+                FROM (
+                    SELECT ticker, {valid_line},
+                           ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
+                    FROM madb.{ma_table}
+                    WHERE ticker IN ({placeholders})
+                ) WHERE rn = 1
+            )
+            SELECT d.ticker, (CAST(d.close AS REAL) / m.{valid_line}) * 100.0 as disparity
+            FROM latest_main d
+            JOIN latest_ma m ON d.ticker = m.ticker
+            WHERE m.{valid_line} IS NOT NULL
+              AND (CAST(d.close AS REAL) / m.{valid_line}) * 100.0 {operator} ?
+            """
+
+            return {
+                r["ticker"]: {filter_id: round(r["disparity"], 4)}
+                for r in conn.execute(query, query_params).fetchall()
+            }
+        finally:
+            try:
+                conn.execute("DETACH DATABASE madb")
+            except Exception:
+                pass
+            conn.close()
+
+    async def _handle_volume_peak_breakout(
+        self,
+        filter_id: str,
+        params: dict[str, Any],
+        current_tickers: dict[str, dict[str, float]] | None = None,
+    ) -> dict[str, dict[str, float]]:
+        """최대 거래량 매물대 돌파 판별 필터"""
+        lookback = params.get("lookback")
+        if lookback not in ("1M", "3M", "2H", "4H"):
+            raise ValueError(
+                f"volume_peak_breakout 파라미터 오류: lookback은 '1M', '3M', '2H', '4H' 중 하나여야 합니다. (입력: {lookback})"
+            )
+
+        is_daily = "M" in lookback
+        table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
+        order_desc = "date DESC" if is_daily else "date DESC, time DESC"
+
+        duration = {"1M": 30, "3M": 60, "2H": 120, "4H": 240}[lookback]
+
+        from core.database import connect_sqlite
+
+        if current_tickers is None:
+            conn = connect_sqlite()
+            try:
+                rows = conn.execute(
+                    "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
+                ).fetchall()
+                current_tickers = {r["ticker"]: {} for r in rows}
+            finally:
+                conn.close()
+
+        if not current_tickers:
+            return {}
+
+        conn = connect_sqlite()
+        try:
+            placeholders = ", ".join("?" for _ in current_tickers.keys())
+            query_params = tuple(current_tickers.keys())
+
+            query = f"""
+            WITH recent_data AS (
+                SELECT ticker, close, high, volume, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
+                FROM {table_name}
+                WHERE ticker IN ({placeholders})
+            ),
+            latest_close AS (
+                SELECT ticker, close
+                FROM recent_data
+                WHERE rn = 1
+            ),
+            max_volume_candle AS (
+                SELECT ticker, high as max_vol_high
+                FROM (
+                    SELECT ticker, high, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY volume DESC) as v_rn
+                    FROM recent_data
+                    WHERE rn <= {duration}
+                ) WHERE v_rn = 1
+            )
+            SELECT l.ticker, ((l.close - m.max_vol_high) * 100.0 / m.max_vol_high) as breakout_rate
+            FROM latest_close l
+            JOIN max_volume_candle m ON l.ticker = m.ticker
+            WHERE l.close > m.max_vol_high
+            """
+
+            return {
+                r["ticker"]: {filter_id: round(r["breakout_rate"], 4)}
+                for r in conn.execute(query, query_params).fetchall()
+            }
+        finally:
+            conn.close()
 
     async def _fetch_investor_rank(
         self, etc_cls_code: str, filter_id: str, limit: int = 30
