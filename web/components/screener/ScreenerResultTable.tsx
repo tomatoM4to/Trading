@@ -50,8 +50,8 @@ function formatKoreanCurrency(value: number | null | undefined): string {
 
 // 필터 타입에 따른 정렬 방향
 function getSortType(type: string): "asc" | "desc" {
-  if (type === "ma_cross") return "desc"; // 크로스 이격폭은 클수록 좋음
-  return "asc"; // 정배열 편차, 수렴 오차, 수급 순위는 모두 낮을수록(오름차순) 좋음
+  if (type === "ma_cross" || type === "volume_peak_breakout") return "desc"; // 크로스 이격폭, 돌파율은 클수록 좋음
+  return "asc"; // 정배열 편차, 수렴 오차, 수급 순위, 이격도는 낮을수록(오름차순) 좋음
 }
 
 // 필터 이름 한글화 헬퍼
@@ -63,6 +63,8 @@ function getFilterDisplayName(type: string): string {
     case "ma_convergence_point": return "수렴 지점";
     case "foreign_net_buy_rank": return "외국인 순매수";
     case "inst_net_buy_rank": return "기관 순매수";
+    case "disparity_value": return "이격도";
+    case "volume_peak_breakout": return "매물대 돌파";
     default: return type;
   }
 }
