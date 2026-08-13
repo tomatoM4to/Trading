@@ -182,7 +182,9 @@ class SystemScheduler:
                     cursor = conn.cursor()
 
                     # 1. 스마트 트리거: 어제 장이 열렸는지 판별
-                    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+                    yesterday = int(
+                        (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+                    )
                     cursor.execute(
                         "SELECT 1 FROM daily_ohlcv WHERE date = ? LIMIT 1", (yesterday,)
                     )

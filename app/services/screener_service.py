@@ -4,6 +4,21 @@ from schemas.screener import FilterNode, ScreenerRequest
 
 
 class ScreenerEngine:
+    VALID_MA_PERIODS = {"5", "10", "20", "60", "120", "200"}
+
+    def _validate_ma_line(self, line: str) -> str:
+        val = str(line).split("_")[-1]
+        if val not in self.VALID_MA_PERIODS:
+            raise ValueError(f"유효하지 않은 MA 기간입니다: {line}")
+        return f"ma{val}"
+
+    def _validate_duration(self, duration: int, max_val: int = 500) -> int:
+        if not isinstance(duration, int) or not (1 <= duration <= max_val):
+            raise ValueError(
+                f"기간(duration/within)은 1~{max_val} 범위의 정수여야 합니다. (입력: {duration})"
+            )
+        return duration
+
     def __init__(self):
         # 지원하는 필터 모듈 맵핑
         self.filter_handlers = {
@@ -273,14 +288,11 @@ class ScreenerEngine:
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
-        # 컬럼명 매핑 (예: ma_daily_5 -> ma5)
-        mapped = [
-            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line
-            for line in lines
-        ]
+        # 컬럼명 검증 및 매핑
+        mapped = [self._validate_ma_line(line) for line in lines]
+
         max_candles = 390 if not is_daily else 300
-        if duration > max_candles:
-            raise ValueError(f"지정된 duration({duration})이 정책 최대치를 초과합니다.")
+        duration = self._validate_duration(duration, max_candles)
 
         conds = [f"({mapped[i]} > {mapped[i + 1]})" for i in range(len(mapped) - 1)]
         trend_select = (
@@ -348,20 +360,11 @@ class ScreenerEngine:
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
-        s_col = (
-            f"ma{short_line.split('_')[-1]}"
-            if short_line.startswith("ma_daily_")
-            else short_line
-        )
-        l_col = (
-            f"ma{long_line.split('_')[-1]}"
-            if long_line.startswith("ma_daily_")
-            else long_line
-        )
+        s_col = self._validate_ma_line(short_line)
+        l_col = self._validate_ma_line(long_line)
 
         max_candles = 390 if not is_daily else 300
-        if within > max_candles:
-            raise ValueError("within 값이 정책 최대치를 초과합니다.")
+        within = self._validate_duration(within, max_candles)
 
         if direction == "golden":
             cross_cond = (
@@ -441,13 +444,10 @@ class ScreenerEngine:
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
-        mapped = [
-            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line
-            for line in lines
-        ]
+        mapped = [self._validate_ma_line(line) for line in lines]
+
         max_candles = 390 if not is_daily else 300
-        if duration > max_candles:
-            raise ValueError("duration 값이 정책 최대치를 초과합니다.")
+        duration = self._validate_duration(duration, max_candles)
 
         max_func = f"MAX({', '.join(mapped)})"
         min_func = f"MIN({', '.join(mapped)})"
@@ -511,13 +511,10 @@ class ScreenerEngine:
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
-        mapped = [
-            f"ma{line.split('_')[-1]}" if line.startswith("ma_daily_") else line
-            for line in lines
-        ]
+        mapped = [self._validate_ma_line(line) for line in lines]
+
         max_candles = 390 if not is_daily else 300
-        if within > max_candles:
-            raise ValueError("within 값이 정책 최대치를 초과합니다.")
+        within = self._validate_duration(within, max_candles)
 
         max_func = f"MAX({', '.join(mapped)})"
         min_func = f"MIN({', '.join(mapped)})"

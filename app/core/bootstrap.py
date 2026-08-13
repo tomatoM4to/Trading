@@ -71,7 +71,7 @@ async def rebuild_ma_database():
             dates_cursor = disk_conn.execute(
                 "SELECT DISTINCT date FROM minute_ohlcv ORDER BY date DESC LIMIT 3"
             )
-            recent_dates = [str(r["date"]) for r in dates_cursor.fetchall()]
+            recent_dates = [r["date"] for r in dates_cursor.fetchall()]
 
             if recent_dates:
                 placeholders = ",".join("?" for _ in recent_dates)

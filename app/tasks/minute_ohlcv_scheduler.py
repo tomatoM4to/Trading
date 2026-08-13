@@ -338,7 +338,7 @@ async def run_minute_ohlcv_scheduler(
         )
 
         if single_cycle:
-            logger.info("Single cycle finished. Exiting minute scheduler (test mode).")
+            logger.sched("Single cycle finished. Exiting minute scheduler (test mode).")
             break
 
         now_time = datetime.now().time()

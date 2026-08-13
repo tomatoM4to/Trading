@@ -24,23 +24,23 @@ def init_stock_codes_db():
     kospi_csv_path = base_dir / "kospi_codes.csv"
     kosdaq_csv_path = base_dir / "kosdaq_codes.csv"
 
-    logger.info("Downloading and processing KOSPI master file...")
+    logger.sched("Downloading and processing KOSPI master file...")
     kospi_master_download(base_dir_str)
     kospi_df = get_kospi_master_dataframe(base_dir_str)
     kospi_df["market"] = "KOSPI"
     # 데이터프레임을 CSV 파일로 먼저 생성 (엑셀/한글 호환성을 위해 utf-8-sig 사용)
     kospi_df.to_csv(kospi_csv_path, index=False, encoding="utf-8-sig")
-    logger.info("Created CSV file: %s", kospi_csv_path.name)
+    logger.sched("Created CSV file: %s", kospi_csv_path.name)
 
-    logger.info("Downloading and processing KOSDAQ master file...")
+    logger.sched("Downloading and processing KOSDAQ master file...")
     kosdaq_master_download(base_dir_str)
     kosdaq_df = get_kosdaq_master_dataframe(base_dir_str)
     kosdaq_df["market"] = "KOSDAQ"
     # 데이터프레임을 CSV 파일로 먼저 생성
     kosdaq_df.to_csv(kosdaq_csv_path, index=False, encoding="utf-8-sig")
-    logger.info("Created CSV file: %s", kosdaq_csv_path.name)
+    logger.sched("Created CSV file: %s", kosdaq_csv_path.name)
 
-    logger.info("Parsing CSV files and combining with filters...")
+    logger.sched("Parsing CSV files and combining with filters...")
     # 만들어진 CSV 파일을 다시 파싱해서 읽기
     parsed_kospi_df = pd.read_csv(kospi_csv_path, dtype=str)
     parsed_kosdaq_df = pd.read_csv(kosdaq_csv_path, dtype=str)
@@ -121,12 +121,12 @@ def init_stock_codes_db():
     for col in numeric_cols:
         combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce").fillna(0)
 
-    logger.info("Saving parsed stock codes to SQLite database...")
+    logger.sched("Saving parsed stock codes to SQLite database...")
     conn = connect_sqlite()
     try:
         conn.execute("DELETE FROM stock_codes")
         combined_df.to_sql("stock_codes", conn, if_exists="append", index=False)
-        logger.info(
+        logger.sched(
             f"Successfully initialized {len(combined_df)} stock codes into database from CSV."
         )
     except Exception as e:
@@ -141,7 +141,7 @@ def init_stock_codes_db():
 
 def cleanup_temp_files(base_dir: Path):
     """파싱 이후 남은 임시 마스터 파일(.mst, .zip, .tmp)을 삭제한다."""
-    logger.info("Cleaning up temporary master files...")
+    logger.sched("Cleaning up temporary master files...")
     for ext in ["*.mst", "*.zip", "*.tmp"]:
         for file_path in base_dir.glob(ext):
             try:

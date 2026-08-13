@@ -88,4 +88,13 @@ async def get_chart(ticker: str, days: int = 3, type: str = "minute"):
     특정 종목의 차트 데이터 및 다중 주기 이평선 데이터를 조회합니다.
     type: 'minute' (분봉) 또는 'daily' (일봉)
     """
+    if type not in ("minute", "daily"):
+        raise HTTPException(
+            status_code=400, detail="유효하지 않은 type 입니다. ('minute' 또는 'daily')"
+        )
+    if days < 1 or days > 500:
+        raise HTTPException(
+            status_code=400, detail="조회 기간(days)은 1~500 범위여야 합니다."
+        )
+
     return await get_chart_data(ticker, days=days, timeframe=type)

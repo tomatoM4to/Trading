@@ -158,7 +158,7 @@ async def start_q_worker():
                 await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
-                logger.info("[KIS Async Worker] Worker task cancelled.")
+                logger.sched("[KIS Async Worker] Worker task cancelled.")
                 break
             except Exception as e:
                 logger.error(
@@ -168,8 +168,9 @@ async def start_q_worker():
     if _kis_queue is None:
         _kis_queue = asyncio.PriorityQueue()
         _kis_worker_task = asyncio.create_task(request_consumer())
-        logger.info(
-            "[KIS Async Worker] Started background worker for API rate limiting (20 req/s)."
+        logger.sched(
+            "[KIS Async Worker] Started background worker (Target: %s req/sec)",
+            1 / 0.1,
         )
 
 
@@ -183,7 +184,7 @@ async def stop_q_worker():
         except asyncio.CancelledError:
             pass
         _kis_worker_task = None
-        logger.info("[KIS Async Worker] Worker task stopped safely.")
+        logger.sched("[KIS Async Worker] Worker task stopped safely.")
 
 
 def _do_fetch(
