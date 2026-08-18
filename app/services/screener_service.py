@@ -636,11 +636,11 @@ class ScreenerEngine:
                     WHERE ticker IN ({placeholders})
                 ) WHERE rn = 1
             )
-            SELECT d.ticker, (CAST(d.close AS REAL) / m.{valid_line}) * 100.0 as disparity
+            SELECT d.ticker, (CAST(d.close AS REAL) / NULLIF(m.{valid_line}, 0)) * 100.0 as disparity
             FROM latest_main d
             JOIN latest_ma m ON d.ticker = m.ticker
             WHERE m.{valid_line} IS NOT NULL
-              AND (CAST(d.close AS REAL) / m.{valid_line}) * 100.0 {operator} ?
+              AND (CAST(d.close AS REAL) / NULLIF(m.{valid_line}, 0)) * 100.0 {operator} ?
             """
 
             return {
@@ -712,7 +712,7 @@ class ScreenerEngine:
                     WHERE rn <= {duration}
                 ) WHERE v_rn = 1
             )
-            SELECT l.ticker, ((l.close - m.max_vol_high) * 100.0 / m.max_vol_high) as breakout_rate
+            SELECT l.ticker, ((l.close - m.max_vol_high) * 100.0 / NULLIF(m.max_vol_high, 0)) as breakout_rate
             FROM latest_close l
             JOIN max_volume_candle m ON l.ticker = m.ticker
             WHERE l.close > m.max_vol_high

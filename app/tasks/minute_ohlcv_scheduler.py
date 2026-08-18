@@ -171,6 +171,16 @@ async def process_ticker(
         if not df_clean.empty:
             success_any = True
 
+            # STRICT INTEGER 컬럼 형변환 보장
+            df_clean["amount"] = df_clean["amount"].fillna(0).astype(int)
+            df_clean["date"] = df_clean["date"].astype(int)
+            df_clean["time"] = df_clean["time"].astype(int)
+            df_clean["open"] = df_clean["open"].astype(int)
+            df_clean["high"] = df_clean["high"].astype(int)
+            df_clean["low"] = df_clean["low"].astype(int)
+            df_clean["close"] = df_clean["close"].astype(int)
+            df_clean["volume"] = df_clean["volume"].astype(int)
+
             from core.database import connect_ma_db, connect_sqlite
             from core.ma_calculator import ma_calculator
 
