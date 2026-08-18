@@ -1,7 +1,7 @@
 # ADR-025: SQLite Ticker Push-down and Reverse Windowing Optimization
 
 ## Status
-Accepted
+Superseded by ADR-026 (Hybrid In-Memory MA Architecture) and ADR-027 (Parameterized Queries & Cost Calculation)
 
 ## Date
 2026-08-05

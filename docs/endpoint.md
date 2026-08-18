@@ -65,15 +65,38 @@ KIS OpenAPI의 JSON 응답은 깊이가 깊고 파편화되어 있습니다. 이
 ---
 
 ## 4. 퍼블릭 마켓 라우터 (`/market`)
-**파일 위치:** `app/routes/market.py`
+**파일 위치:** `app/routes/market.py`, `app/services/market_service.py`
 
-프론트엔드 대시보드(Next.js 예정) 혹은 내부 트레이딩 봇이 판단을 내리기 위해 호출하는 API입니다.
+프론트엔드 대시보드(Next.js) 및 차트 뷰어가 호출하는 시세 조회 API입니다. KIS API 실시간 의존 없이 인메모리 SQLite DB를 기반으로 작동합니다.
 
-### 4-A. Zero-Latency 시세 및 스크리너 조회 (`/screener/minute-breakout`)
+### 4-A. 차트 및 이동평균선 조회 (`GET /market/chart/{ticker}`)
+- **파라미터**:
+  - `ticker` (Path, `str`): 종목 코드 (예: `005930`)
+  - `days` (Query, `int`, 기본값: 3, 범위: 1~500): 조회 기간 (영업일 기준)
+  - `type` (Query, `str`, 기본값: `'minute'`): `'minute'` (분봉) 또는 `'daily'` (일봉)
 - **작동 원리**:
-  - KIS API 서버를 거치지 않고 오직 로컬 `trading.db`의 `minute_ohlcv` 테이블만을 조회합니다.
-  - 1GB RAM 환경에서 Pandas로 수천 종목을 병합(`Merge`)하는 메모리 폭발을 막기 위해, **SQLite의 윈도우 함수(`AVG() OVER (PARTITION BY ticker ORDER BY date, time)`)** 등을 적극 활용하여 이동평균선 계산과 조건 필터링을 DB 엔진단에서 처리합니다.
-  - 이를 통해 특정 조건(예: 거래대금 폭발, 특정 이평선 돌파)을 만족하는 주도주 리스트(Hotlist)를 수십 밀리초 내로 즉각 반환합니다.
+  - 로컬 인메모리 DB의 `minute_ohlcv` 또는 `daily_ohlcv` 테이블에서 캔들 시계열을 추출합니다.
+  - 동시에 전용 In-Memory MA DB(`minute_ma` 또는 `daily_ma`)와 결합하여 5, 10, 20, 60, 120, 200 이평선 데이터를 완벽히 정렬하여 반환합니다 (참고: ADR-026, ADR-029).
+  - 프론트엔드는 1분봉/일봉 원본 데이터를 수신한 뒤 클라이언트 사이드에서 3m, 5m, 15m, 30m, 60m, 주봉, 월봉 등으로 자유롭게 그룹핑(Aggregation)합니다.
 
-### 4-B. (추후 확장을 위한) 실시간 스트리밍
-- 추후 프론트엔드(Next.js / React Native) 대시보드 구성을 위해 WebSocket이나 SSE(Server-Sent Events)를 통해 스크리너 결과를 실시간 알림 형태로 Push하는 기능이 추가될 예정입니다.
+### 4-B. 거래대금 상위 랭킹 (`GET /market/screener/top-volume`)
+- **파라미터**: 없음 (내부 고정 `limit=30`)
+- **작동 원리**:
+  - 최근 영업일 기준 거래대금 및 거래량이 가장 높은 상위 30개 종목을 로컬 인메모리 DB에서 즉시 추출하여 반환합니다.
+
+---
+
+## 5. 동적 스크리너 라우터 (`/api/screener`)
+**파일 위치:** `app/routes/screener.py`, `app/services/screener_service.py`
+
+사용자가 프론트엔드에서 조합한 다중 기술적 지표(이평선 정배열, 크로스, 수렴, 이격도, 매물대 돌파 등) 및 수급 지표(외국인/기관 순매수)를 실시간으로 평가하여 조건에 부합하는 종목 리스트를 반환하는 핵심 엔진입니다.
+
+### 5-A. 실시간 스크리너 실행 (`POST /api/screener/run`)
+- **Request Body**: `ScreenerRequest` (`filters`: Flat List AST, `operations`: `AND`/`OR` 연산자 배열)
+- **Response Format**: `StreamingResponse(text/event-stream)` (SSE 방식)
+- **작동 원리**:
+  - **Zero-Latency In-Memory MA**: 무거운 윈도우 함수(`AVG OVER`)를 일절 사용하지 않고, 부팅/수집 시 사전 계산된 인메모리 테이블(`daily_ma`, `minute_ma`)을 단순 스캔(`ROW_NUMBER() <= duration`)합니다 (참고: ADR-026).
+  - **휴리스틱 쿼리 최적화**: Flat AST를 `OR` 기준으로 분기한 후 `AND` 체인 내부를 Big-O 비용 오름차순으로 정렬합니다. KIS 랭킹 API(외인/기관)는 Cost 0으로 최우선 실행되어 종목 모수를 30개로 즉시 축소시킵니다 (참고: ADR-024).
+  - **Short-circuit & Parameterized Push-down**: 중간 결과 집합이 빈 집합(`set()`)이 되면 후속 연산을 즉시 중단하며, 축소된 종목 코드는 `WHERE ticker IN (?, ...)` 형태로 안전하게 바인딩됩니다 (참고: ADR-027, ADR-033).
+  - **Progressive Feedback**: 필터별 진행률(`progress`)과 최종 리치 데이터(`complete`, 종목명/현재가/거래대금/등락률/다중 지표 점수 `filter_values` 포함)를 SSE 스트림으로 실시간 발행합니다 (참고: ADR-018, ADR-028).
+
