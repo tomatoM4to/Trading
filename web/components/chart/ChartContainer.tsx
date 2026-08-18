@@ -77,8 +77,8 @@ export default function ChartContainer({ ticker }: { ticker: string }) {
         const type = isDailyTF ? "daily" : "minute";
         const res = await getChartData(ticker, 3, type);
         setData(res);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to load chart data");
       } finally {
         setLoading(false);
       }

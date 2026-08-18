@@ -204,7 +204,7 @@ export function ScreenerBuilder() {
             setFilterStatuses(prev => ({ ...prev, [data.filter_id]: "done" }));
             setRemainingCount(data.remaining);
           } else if (data.type === "complete") {
-            const mappedResults = (data.items || []).map((item: any) => ({
+            const mappedResults = (data.items || []).map((item: ScreenerResult) => ({
               ticker: item.ticker,
               name: item.name,
               market: item.market,

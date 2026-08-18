@@ -64,7 +64,7 @@ def get_ticker_status(
 @action_router.post("/gc")
 async def trigger_garbage_collection():
     """
-    명시적으로 일봉/분봉 가비지 컬렉터(For Loop Chunking GC)를 실행합니다.
+    명시적으로 일봉/분봉 지능형 가비지 컬렉터(Intelligent GC)를 실행합니다.
     """
     from core.scheduler import SystemScheduler
 
