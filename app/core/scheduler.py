@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from core.kis_auth import auth
@@ -78,13 +79,13 @@ class SystemScheduler:
             misfire_grace_time=3600,
         )
 
-        # 4. 매일 밤 23:00 일/분봉 가비지 컬렉션 (For Loop Chunking GC)
+        # 4. 매일 새벽 04:00 일/분봉 가비지 컬렉션 (Intelligent GC)
         self.scheduler.add_job(
             self.cleanup_ohlcv_job,
             trigger="cron",
-            hour=23,
+            hour=4,
             minute=0,
-            id="cleanup_ohlcv_gc_2300",
+            id="cleanup_ohlcv_gc_0400",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -136,13 +137,16 @@ class SystemScheduler:
         from tasks.init_stock_codes import init_stock_codes_db
 
         try:
+            from core.state import system_state
+
             logger.sched("Starting scheduled stock codes refresh...")
-            await asyncio.to_thread(init_stock_codes_db)
-            logger.sched("Scheduled stock codes refresh completed.")
+            with system_state.acquire("마스터 데이터 동기화 중입니다."):
+                await asyncio.to_thread(init_stock_codes_db)
+                logger.sched("Scheduled stock codes refresh completed.")
 
-            from core.database import sync_memory_to_disk
+                from core.database import sync_memory_to_disk
 
-            await asyncio.to_thread(sync_memory_to_disk)
+                await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -163,44 +167,89 @@ class SystemScheduler:
             logger.error("Scheduled minute OHLCV collector failed: %s", e)
 
     async def cleanup_ohlcv_job(self) -> None:
-        """오후 11시(23:00) 일봉/분봉 가비지 컬렉션 (Time-based Bulk GC).
-        일봉은 300일 이전, 분봉은 7일 이전 데이터를 단일 쿼리로 일괄 삭제합니다.
+        """새벽 4시(04:00) 일봉/분봉 지능형 가비지 컬렉션 (Intelligent GC).
+        어제가 휴장일이면 스킵하며, 각 종목별 최신 거래일 기준으로 분봉 2일, 일봉 500일 유지.
         """
         from core.database import connect_sqlite
+        from core.state import system_state
 
         try:
-            logger.sched("Starting OHLCV garbage collection (Time-based Bulk GC)...")
+            logger.sched("Starting OHLCV intelligent garbage collection...")
 
             def _run_gc():
                 conn = connect_sqlite()
                 try:
                     cursor = conn.cursor()
 
-                    # 1. 일봉 GC: 300일 경과 데이터 일괄 삭제 (YYYYMMDD 형식 비교)
-                    cursor.execute(
-                        "DELETE FROM daily_ohlcv WHERE date < strftime('%Y%m%d', 'now', 'localtime', '-300 days')"
+                    # 1. 스마트 트리거: 어제 장이 열렸는지 판별
+                    yesterday = int(
+                        (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
                     )
-                    total_daily_deleted = cursor.rowcount
+                    cursor.execute(
+                        "SELECT 1 FROM daily_ohlcv WHERE date = ? LIMIT 1", (yesterday,)
+                    )
+                    if not cursor.fetchone():
+                        logger.sched(
+                            f"어제({yesterday})는 휴장일이므로 GC를 스킵합니다."
+                        )
+                        return 0, 0
 
-                    # 2. 분봉 GC: 7일 경과 데이터 일괄 삭제 (YYYYMMDD 형식 비교)
+                    # 2. 분봉 지능형 GC (2영업일 유지)
                     cursor.execute(
-                        "DELETE FROM minute_ohlcv WHERE date < strftime('%Y%m%d', 'now', 'localtime', '-7 days')"
+                        "CREATE TEMP TABLE IF NOT EXISTS gc_minute_thresholds (ticker TEXT PRIMARY KEY, threshold_date INTEGER) STRICT"
                     )
+                    cursor.execute("DELETE FROM gc_minute_thresholds")
+                    cursor.execute("""
+                        INSERT INTO gc_minute_thresholds (ticker, threshold_date)
+                        SELECT ticker, MIN(date)
+                        FROM (
+                            SELECT ticker, date, DENSE_RANK() OVER (PARTITION BY ticker ORDER BY date DESC) as rnk
+                            FROM minute_ohlcv
+                        )
+                        WHERE rnk <= 2
+                        GROUP BY ticker
+                    """)
+                    cursor.execute("""
+                        DELETE FROM minute_ohlcv
+                        WHERE date < (SELECT threshold_date FROM gc_minute_thresholds WHERE gc_minute_thresholds.ticker = minute_ohlcv.ticker)
+                    """)
                     total_minute_deleted = cursor.rowcount
+
+                    # 3. 일봉 지능형 GC (500영업일 유지)
+                    cursor.execute(
+                        "CREATE TEMP TABLE IF NOT EXISTS gc_daily_thresholds (ticker TEXT PRIMARY KEY, threshold_date INTEGER) STRICT"
+                    )
+                    cursor.execute("DELETE FROM gc_daily_thresholds")
+                    cursor.execute("""
+                        INSERT INTO gc_daily_thresholds (ticker, threshold_date)
+                        SELECT ticker, MIN(date)
+                        FROM (
+                            SELECT ticker, date, ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) as rnk
+                            FROM daily_ohlcv
+                        )
+                        WHERE rnk <= 500
+                        GROUP BY ticker
+                    """)
+                    cursor.execute("""
+                        DELETE FROM daily_ohlcv
+                        WHERE date < (SELECT threshold_date FROM gc_daily_thresholds WHERE gc_daily_thresholds.ticker = daily_ohlcv.ticker)
+                    """)
+                    total_daily_deleted = cursor.rowcount
 
                     conn.commit()
                     return total_daily_deleted, total_minute_deleted
                 finally:
                     conn.close()
 
-            daily_del, minute_del = await asyncio.to_thread(_run_gc)
-            logger.sched(
-                f"OHLCV GC completed. Deleted daily: {daily_del} rows, minute: {minute_del} rows."
-            )
+            with system_state.acquire("지능형 가비지 컬렉터 구동 중입니다."):
+                daily_del, minute_del = await asyncio.to_thread(_run_gc)
+                logger.sched(
+                    f"OHLCV GC completed. Deleted daily: {daily_del} rows, minute: {minute_del} rows."
+                )
 
-            from core.database import sync_memory_to_disk
+                from core.database import sync_memory_to_disk
 
-            await asyncio.to_thread(sync_memory_to_disk)
+                await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -208,17 +257,19 @@ class SystemScheduler:
 
     async def run_daily_ohlcv_job(self) -> None:
         """오후 4시 정규 일봉 데이터 업데이트 Job."""
+        from core.state import system_state
         from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
 
         try:
             logger.sched("Starting scheduled daily OHLCV update (KOSPI & KOSDAQ)...")
-            await run_daily_ohlcv_scheduler("KOSPI")
-            await run_daily_ohlcv_scheduler("KOSDAQ")
-            logger.sched("Scheduled daily OHLCV update completed.")
+            with system_state.acquire("정규 일봉 데이터 업데이트 중입니다."):
+                await run_daily_ohlcv_scheduler("KOSPI")
+                await run_daily_ohlcv_scheduler("KOSDAQ")
+                logger.sched("Scheduled daily OHLCV update completed.")
 
-            from core.database import sync_memory_to_disk
+                from core.database import sync_memory_to_disk
 
-            await asyncio.to_thread(sync_memory_to_disk)
+                await asyncio.to_thread(sync_memory_to_disk)
         except asyncio.CancelledError:
             raise
         except Exception as e:

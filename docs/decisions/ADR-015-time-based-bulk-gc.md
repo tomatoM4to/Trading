@@ -1,7 +1,7 @@
 # ADR-015: Shift to Time-based Bulk GC (Garbage Collection)
 
 ## Status
-Accepted | Superseded ADR-003
+Superseded by ADR-031 (Intelligent GC & Smart Trigger)
 
 ## Date
 2026-08-01

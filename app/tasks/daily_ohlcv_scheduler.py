@@ -92,7 +92,7 @@ async def process_ticker(
         processed_data.append(
             {
                 "ticker": ticker,
-                "date": item.stck_bsop_date,
+                "date": int(item.stck_bsop_date),
                 "open": int(item.stck_oprc),
                 "high": int(item.stck_hgpr),
                 "low": int(item.stck_lwpr),

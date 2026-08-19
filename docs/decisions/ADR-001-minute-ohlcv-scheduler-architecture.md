@@ -1,7 +1,7 @@
 # ADR-001: Minute OHLCV Scheduler Architecture
 
 ## Status
-Accepted
+Superseded by ADR-010 (Unified Minute Scheduler) and ADR-031 (Intelligent GC)
 
 ## Date
 2026-07-11

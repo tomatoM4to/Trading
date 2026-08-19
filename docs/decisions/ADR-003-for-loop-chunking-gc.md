@@ -1,7 +1,7 @@
 # ADR-003: For-Loop Chunking Strategy for Garbage Collection
 
 ## Status
-Superseded by ADR-015
+Superseded by ADR-015 and ADR-031 (Intelligent GC & Smart Trigger)
 
 ## Date
 2026-07-12

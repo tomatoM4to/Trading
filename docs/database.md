@@ -35,7 +35,7 @@
 ---
 
 ## 2. `daily_ohlcv` (일봉 테이블)
-전 종목의 과거 시계열 데이터(최소 400일 이상)를 저장합니다.
+전 종목의 과거 시계열 데이터(최대 500일)를 저장합니다. 200일선 계산을 완벽하게 보장하기 위한 최소한의 데이터 버퍼입니다.
 
 ### 테이블 스키마 (WITHOUT ROWID, STRICT)
 | 컬럼명 | 타입 | 제약 조건 | 설명 |
@@ -69,18 +69,20 @@
 
 ---
 
-## 4. `daily_investors` (수급 전용 테이블 - 개발 예정)
-기관 및 외국인의 자금 유입을 추적하여 Breakout 매매의 신뢰도를 높이기 위한 핫리스트(Hotlist) 추출용 테이블입니다. 
+## 4. `daily_investors` (수급 전용 테이블 - 향후 일별 누적용 연동 예정)
+기관 및 외국인의 장기 자금 유입 추세를 추적하기 위한 시계열 수급 테이블입니다. 
+*(참고: 현재 스크리너 엔진의 수급 필터링은 KIS OpenAPI 장중 가집계 랭킹 API(`FHPTJ04400000`)를 실시간 Bulk 호출하여 상위 30건을 추출하는 방식으로 운용 중이며, 본 테이블은 추후 일별 누적 수급 분석을 위한 스케줄러 확장용으로 연동될 예정입니다.)*
 
-### 테이블 스키마 (초안)
+### 테이블 스키마 (초안 - WITHOUT ROWID, STRICT)
 | 컬럼명 | 타입 | 제약 조건 | 설명 |
 |---|---|---|---|
 | `ticker` | TEXT | PK (Composite) | 단축코드 |
-| `date` | TEXT | PK (Composite) | 거래일자 (YYYYMMDD 형식) |
+| `date` | INTEGER | PK (Composite) | 거래일자 (YYYYMMDD 형식 정수) |
 | `foreign_vol` | INTEGER | | 외인 순매수 수량 |
 | `foreign_amt` | INTEGER | | 외인 순매수 대금 |
 | `inst_vol` | INTEGER | | 기관 순매수 수량 |
 | `inst_amt` | INTEGER | | 기관 순매수 대금 |
+
 
 ---
 

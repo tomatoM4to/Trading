@@ -96,8 +96,10 @@ def init_sqlite_connection() -> None:
     if disk_path.exists():
         logger.info("Loading physical DB into shared memory... This may take a moment.")
         disk_conn = sqlite3.connect(disk_path)
-        disk_conn.backup(_keepalive_conn)
-        disk_conn.close()
+        try:
+            disk_conn.backup(_keepalive_conn)
+        finally:
+            disk_conn.close()
         logger.info("Database loaded into memory successfully.")
 
     # 이 시점 이후부터 생성되는 모든 커넥션은 in-memory DB를 바라보도록 설정

@@ -82,7 +82,7 @@ async def process_ticker(
     ticker: str,
     last_datetime: str | None = None,
     limit_days: int = 14,
-    max_steps: int = 15,
+    max_steps: int = 7,
     priority: int = 7,
 ) -> tuple[bool, str | None]:
     """
@@ -170,6 +170,16 @@ async def process_ticker(
         df_clean = df_clean.dropna(subset=["date", "time", "close"])
         if not df_clean.empty:
             success_any = True
+
+            # STRICT INTEGER 컬럼 형변환 보장
+            df_clean["amount"] = df_clean["amount"].fillna(0).astype(int)
+            df_clean["date"] = df_clean["date"].astype(int)
+            df_clean["time"] = df_clean["time"].astype(int)
+            df_clean["open"] = df_clean["open"].astype(int)
+            df_clean["high"] = df_clean["high"].astype(int)
+            df_clean["low"] = df_clean["low"].astype(int)
+            df_clean["close"] = df_clean["close"].astype(int)
+            df_clean["volume"] = df_clean["volume"].astype(int)
 
             from core.database import connect_ma_db, connect_sqlite
             from core.ma_calculator import ma_calculator
@@ -338,7 +348,7 @@ async def run_minute_ohlcv_scheduler(
         )
 
         if single_cycle:
-            logger.info("Single cycle finished. Exiting minute scheduler (test mode).")
+            logger.sched("Single cycle finished. Exiting minute scheduler (test mode).")
             break
 
         now_time = datetime.now().time()

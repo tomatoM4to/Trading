@@ -85,9 +85,9 @@ export default function LightweightChart({ candleData, lineData, visibleLines }:
     Object.entries(MA_CONFIGS).forEach(([key, config]) => {
       const lineSeries = chart.addSeries(LineSeries, {
         color: config.color,
-        lineWidth: (config as any).lineWidth || 1,
+        lineWidth: (config.lineWidth as 1 | 2 | 3 | 4) ?? 1,
         title: config.title,
-        visible: visibleLines[key] ?? false,
+        visible: false,
       });
       seriesRef.current[key] = lineSeries;
     });

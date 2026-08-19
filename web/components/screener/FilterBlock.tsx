@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { X, Settings2, Loader2, CheckCircle2 } from "lucide-react";
 
-export type FilterType = "ma_alignment" | "ma_cross" | "ma_convergence_consolidation" | "ma_convergence_point" | "foreign_net_buy_rank" | "inst_net_buy_rank";
+export type FilterType = "ma_alignment" | "ma_cross" | "ma_convergence_consolidation" | "ma_convergence_point" | "foreign_net_buy_rank" | "inst_net_buy_rank" | "disparity_value" | "volume_peak_breakout";
 
 export const FILTER_LABELS: Record<FilterType, string> = {
   ma_alignment: "이평선 정배열",
@@ -14,6 +14,8 @@ export const FILTER_LABELS: Record<FilterType, string> = {
   ma_convergence_point: "이평선 수렴 지점 (이벤트)",
   foreign_net_buy_rank: "외국인 순매수 상위 랭킹",
   inst_net_buy_rank: "기관 순매수 상위 랭킹",
+  disparity_value: "이격도",
+  volume_peak_breakout: "최대 거래량 매물대 돌파",
 };
 
 export type FilterStatus = "idle" | "processing" | "done";
@@ -46,6 +48,10 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
       defaultParams = { timeframe: "daily", selected_lines: ["5", "20", "60"], threshold: 2.0, within: 1 };
     } else if (val === "foreign_net_buy_rank" || val === "inst_net_buy_rank") {
       defaultParams = { limit: 30 };
+    } else if (val === "disparity_value") {
+      defaultParams = { timeframe: "daily", line: "20", threshold: 105, direction: "above" };
+    } else if (val === "volume_peak_breakout") {
+      defaultParams = { lookback: "1M" };
     }
     onUpdate(filter.id, { ...filter, type: val, params: defaultParams });
   };
@@ -100,6 +106,8 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
               <SelectItem value="ma_convergence_point">{FILTER_LABELS.ma_convergence_point}</SelectItem>
               <SelectItem value="foreign_net_buy_rank">{FILTER_LABELS.foreign_net_buy_rank}</SelectItem>
               <SelectItem value="inst_net_buy_rank">{FILTER_LABELS.inst_net_buy_rank}</SelectItem>
+              <SelectItem value="disparity_value">{FILTER_LABELS.disparity_value}</SelectItem>
+              <SelectItem value="volume_peak_breakout">{FILTER_LABELS.volume_peak_breakout}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -298,6 +306,81 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
              <div className="text-sm text-muted-foreground p-2 bg-muted/20 rounded-md">
                (KIS 정책상 상위 30개 고정 반환)
              </div>
+          )}
+
+          {filter.type === "disparity_value" && (
+            <>
+              <div className="flex-1 min-w-[120px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">타임프레임</label>
+                <Select
+                  value={String(filter.params.timeframe || "daily")}
+                  onValueChange={(val) => val && handleParamChange("timeframe", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="주기" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">일봉 (Daily)</SelectItem>
+                    <SelectItem value="minute">분봉 (Minute)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">이평선</label>
+                <Select
+                  value={String(filter.params.line || "20")}
+                  onValueChange={(val) => val && handleParamChange("line", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="이평선" /></SelectTrigger>
+                  <SelectContent>
+                    {["5", "10", "20", "60", "120", "200"].map(line => <SelectItem key={line} value={line}>{line}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-1 min-w-[120px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">방향</label>
+                <Select
+                  value={String(filter.params.direction || "above")}
+                  onValueChange={(val) => val && handleParamChange("direction", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="방향" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="above">이상 (&gt;=)</SelectItem>
+                    <SelectItem value="below">이하 (&lt;=)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">임계값 (%)</label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={(filter.params.threshold as string | number) ?? ""}
+                  onChange={(e) => handleParamChange("threshold", e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {filter.type === "volume_peak_breakout" && (
+            <>
+              <div className="flex-1 min-w-[150px]">
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">탐색 기간 (Lookback)</label>
+                <Select
+                  value={String(filter.params.lookback || "1M")}
+                  onValueChange={(val) => val && handleParamChange("lookback", val)}
+                >
+                  <SelectTrigger><SelectValue placeholder="탐색 기간" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1M">일봉 1개월 (30일)</SelectItem>
+                    <SelectItem value="3M">일봉 3개월 (60일)</SelectItem>
+                    <SelectItem value="2H">분봉 2시간 (120분)</SelectItem>
+                    <SelectItem value="4H">분봉 4시간 (240분)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
           )}
         </div>
       </CardContent>

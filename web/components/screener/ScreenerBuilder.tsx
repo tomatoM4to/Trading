@@ -154,6 +154,15 @@ export function ScreenerBuilder() {
           };
         } else if (f.type === "foreign_net_buy_rank" || f.type === "inst_net_buy_rank") {
           backendParams = { limit: 30 };
+        } else if (f.type === "disparity_value") {
+          const prefix = f.params.timeframe === "daily" ? "ma_daily_" : "ma";
+          backendParams = {
+            line: `${prefix}${f.params.line}`,
+            threshold: Number(f.params.threshold),
+            direction: String(f.params.direction)
+          };
+        } else if (f.type === "volume_peak_breakout") {
+          backendParams = { lookback: String(f.params.lookback) };
         }
 
         return {
@@ -195,7 +204,7 @@ export function ScreenerBuilder() {
             setFilterStatuses(prev => ({ ...prev, [data.filter_id]: "done" }));
             setRemainingCount(data.remaining);
           } else if (data.type === "complete") {
-            const mappedResults = (data.items || []).map((item: any) => ({
+            const mappedResults = (data.items || []).map((item: ScreenerResult) => ({
               ticker: item.ticker,
               name: item.name,
               market: item.market,

@@ -107,7 +107,10 @@ def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
         }
         token_url = f"{_kis_cfg.api_url()}/oauth2/tokenP"
         res = requests.post(
-            token_url, data=json.dumps(p), headers=copy.deepcopy(_base_headers)
+            token_url,
+            data=json.dumps(p),
+            headers=copy.deepcopy(_base_headers),
+            timeout=30,
         )
         if res.status_code == 200:
             token_response = KisTokenResponse.model_validate(res.json())
@@ -126,7 +129,7 @@ def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
             with open(token_path, "w", encoding="utf-8") as f:
                 f.write(f"token: {my_tk}\n")
                 f.write(f"valid-date: {valid_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            logger.info("New token acquired and saved to %s", token_path.name)
+            logger.sched("New token acquired and saved to %s", token_path.name)
         else:
             logger.error(
                 "Get authentication token failed. Status Code: %s, Response: %s",

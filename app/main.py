@@ -4,10 +4,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from core.database import init_sqlite_connection
+from core.dependencies import system_state_guard
 from core.kis_fetch import start_q_worker, stop_q_worker
 from core.logging import setup_logging
 from core.scheduler import SystemScheduler
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes import admin, market, screener
 
@@ -87,6 +88,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Trading Server",
     lifespan=lifespan,
+    dependencies=[Depends(system_state_guard)],
 )
 
 # FastAPI CORS configuration
