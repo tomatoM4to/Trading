@@ -187,6 +187,52 @@ class DailyMaIdempotencyTests(unittest.TestCase):
             main_conn.close()
             ma_conn.close()
 
+
+class MinuteMaColdStartTests(unittest.TestCase):
+    def test_rebuild_minute_ma_uses_canonical_chronological_order(self):
+        import sqlite3
+
+        from core.database import MINUTE_MA_RETENTION
+        from tasks.minute_ohlcv_scheduler import rebuild_minute_ma_for_ticker
+
+        main_conn = sqlite3.connect(":memory:")
+        ma_conn = sqlite3.connect(":memory:")
+        try:
+            main_conn.execute(
+                "CREATE TABLE minute_ohlcv (ticker TEXT, date INTEGER, time INTEGER, close INTEGER)"
+            )
+            main_conn.executemany(
+                "INSERT INTO minute_ohlcv VALUES (?, ?, ?, ?)",
+                [("TEST", 20260821, time, time) for time in range(600, 0, -1)],
+            )
+            ma_conn.execute(
+                """
+                CREATE TABLE minute_ma (
+                    ticker TEXT, date INTEGER, time INTEGER,
+                    ma5 REAL, ma10 REAL, ma20 REAL,
+                    ma60 REAL, ma120 REAL, ma200 REAL
+                )
+                """
+            )
+
+            rebuild_minute_ma_for_ticker(main_conn, ma_conn, "TEST")
+
+            count, min_time, max_time = ma_conn.execute(
+                "SELECT COUNT(*), MIN(time), MAX(time) FROM minute_ma"
+            ).fetchone()
+            self.assertEqual(count, MINUTE_MA_RETENTION)
+            self.assertEqual(min_time, 210)
+            self.assertEqual(max_time, 600)
+            ma200 = ma_conn.execute(
+                "SELECT ma200 FROM minute_ma WHERE time = 210"
+            ).fetchone()[0]
+            self.assertEqual(ma200, 110.5)
+        finally:
+            main_conn.close()
+            ma_conn.close()
+
+
+class DailyMaRetentionTests(unittest.TestCase):
     def test_rebuild_daily_ma_keeps_only_screener_horizon(self):
         import sqlite3
 
