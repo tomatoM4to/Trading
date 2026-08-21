@@ -13,6 +13,39 @@ API_URL = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 TR_ID = "FHKST03010100"  # 국내주식기간별시세
 
 
+def rebuild_daily_ma_for_ticker(main_conn, ma_conn, ticker: str) -> None:
+    """Rebuild one ticker's daily MA from canonical OHLCV rows."""
+    from core.ma_calculator import MACalculator
+
+    calculator = MACalculator()
+    ma_records = []
+    rows = main_conn.execute(
+        "SELECT date, close FROM daily_ohlcv WHERE ticker = ? ORDER BY date ASC",
+        (ticker,),
+    )
+    for date, close in rows:
+        calculator.add_daily_close(ticker, close)
+        ma = calculator.get_daily_ma(ticker)
+        ma_records.append(
+            (
+                ticker,
+                date,
+                ma["ma5"],
+                ma["ma10"],
+                ma["ma20"],
+                ma["ma60"],
+                ma["ma120"],
+                ma["ma200"],
+            )
+        )
+
+    ma_conn.execute("DELETE FROM daily_ma WHERE ticker = ?", (ticker,))
+    ma_conn.executemany(
+        "INSERT INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ma_records
+    )
+    ma_conn.commit()
+
+
 async def fetch_and_save_ohlcv(
     ticker: str, end_date: datetime, days_to_subtract: int, priority: int = 7
 ) -> list[dict]:
@@ -107,7 +140,6 @@ async def process_ticker(
         return True
 
     from core.database import connect_ma_db, connect_sqlite
-    from core.ma_calculator import ma_calculator
 
     # 데이터 프레임 변환 후 시간순(ASC) 정렬
     df = pd.DataFrame(processed_data)
@@ -115,23 +147,6 @@ async def process_ticker(
     df = df.sort_values(by="date", ascending=True)
 
     records = df.to_dict("records")
-    ma_records = []
-
-    for row in records:
-        ma_calculator.add_daily_close(row["ticker"], row["close"])
-        ma = ma_calculator.get_daily_ma(row["ticker"])
-        ma_records.append(
-            {
-                "ticker": row["ticker"],
-                "date": row["date"],
-                "ma5": ma["ma5"],
-                "ma10": ma["ma10"],
-                "ma20": ma["ma20"],
-                "ma60": ma["ma60"],
-                "ma120": ma["ma120"],
-                "ma200": ma["ma200"],
-            }
-        )
 
     # SQLite에 Bulk UPSERT (INSERT OR REPLACE)
     conn = connect_sqlite()
@@ -147,15 +162,7 @@ async def process_ticker(
         )
         conn.commit()
 
-        ma_cursor = ma_conn.cursor()
-        ma_cursor.executemany(
-            """
-            INSERT OR REPLACE INTO daily_ma (ticker, date, ma5, ma10, ma20, ma60, ma120, ma200)
-            VALUES (:ticker, :date, :ma5, :ma10, :ma20, :ma60, :ma120, :ma200)
-        """,
-            ma_records,
-        )
-        ma_conn.commit()
+        rebuild_daily_ma_for_ticker(conn, ma_conn, ticker)
 
         return True
     except Exception as e:

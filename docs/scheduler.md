@@ -30,6 +30,8 @@
 
 `app/tasks/daily_ohlcv_scheduler.py`는 종목별 기존 최신 날짜를 확인하고 KIS 일봉 API로 부족한 구간을 가져온다. 결과는 STRICT 스키마에 맞게 정수로 변환하고 bulk upsert한다.
 
+API 경계 누락을 방지하기 위해 기존 날짜와 겹치는 구간도 함께 upsert한다. 일봉 MA는 이 중복 입력을 상태형 계산기에 다시 누적하지 않고, upsert가 끝난 뒤 해당 종목의 canonical OHLCV 전체에서 재계산한다.
+
 - 전 종목을 하나의 DataFrame으로 만들지 않는다.
 - KIS 호출은 전역 큐를 사용한다.
 - 종목 단위 실패가 전체 프로세스를 즉시 중단하지 않도록 기록한다.

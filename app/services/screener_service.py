@@ -22,6 +22,25 @@ class ScreenerEngine:
     def _is_daily_line(self, line: str) -> bool:
         return str(line).startswith("ma_daily_")
 
+    def _validate_ma_lines(self, lines: Any) -> tuple[list[str], bool]:
+        if not isinstance(lines, list) or len(lines) < 2:
+            raise ValueError("서로 다른 MA를 2개 이상 선택해야 합니다.")
+        timeframes = {self._is_daily_line(line) for line in lines}
+        if len(timeframes) != 1:
+            raise ValueError("하나의 필터에서 일봉과 분봉 MA를 혼합할 수 없습니다.")
+        mapped = [self._validate_ma_line(line) for line in lines]
+        if len(set(mapped)) != len(mapped):
+            raise ValueError("동일한 MA 기간을 중복 선택할 수 없습니다.")
+        return mapped, timeframes.pop()
+
+    def _validate_ma_pair(
+        self, short_line: Any, long_line: Any
+    ) -> tuple[str, str, bool]:
+        if not short_line or not long_line:
+            raise ValueError("단기 MA와 장기 MA를 모두 선택해야 합니다.")
+        mapped, is_daily = self._validate_ma_lines([short_line, long_line])
+        return mapped[0], mapped[1], is_daily
+
     def _validate_threshold(self, threshold: Any, max_val: float = 100.0) -> float:
         if isinstance(threshold, bool):
             raise ValueError("임계값은 숫자여야 합니다.")
@@ -317,15 +336,9 @@ class ScreenerEngine:
         """다중 이평선 정배열 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
         duration = params.get("duration", 1)
-        if not lines or len(lines) < 2:
-            return {}
-
-        is_daily = any("daily" in line for line in lines)
+        mapped, is_daily = self._validate_ma_lines(lines)
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
-
-        # 컬럼명 검증 및 매핑
-        mapped = [self._validate_ma_line(line) for line in lines]
 
         max_candles = 390 if not is_daily else 300
         duration = self._validate_duration(duration, max_candles)
@@ -389,15 +402,11 @@ class ScreenerEngine:
         long_line = params.get("long_line")
         within = params.get("within", 1)
         direction = params.get("direction", "golden")
-        if direction not in ("golden", "dead") or not short_line or not long_line:
-            return {}
-
-        is_daily = "daily" in short_line or "daily" in long_line
+        if direction not in ("golden", "dead"):
+            raise ValueError("direction은 golden 또는 dead여야 합니다.")
+        s_col, l_col, is_daily = self._validate_ma_pair(short_line, long_line)
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
-
-        s_col = self._validate_ma_line(short_line)
-        l_col = self._validate_ma_line(long_line)
 
         max_candles = 390 if not is_daily else 300
         within = self._validate_duration(within, max_candles)
@@ -473,14 +482,9 @@ class ScreenerEngine:
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
         duration = params.get("duration", 1)
-        if not lines or len(lines) < 2:
-            return {}
-
-        is_daily = any("daily" in line for line in lines)
+        mapped, is_daily = self._validate_ma_lines(lines)
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
-
-        mapped = [self._validate_ma_line(line) for line in lines]
         threshold = self._validate_threshold(threshold)
 
         max_candles = 390 if not is_daily else 300
@@ -541,14 +545,9 @@ class ScreenerEngine:
         lines = params.get("lines", [])
         threshold = params.get("threshold", 2.0)
         within = params.get("within", 1)
-        if not lines or len(lines) < 2:
-            return {}
-
-        is_daily = any("daily" in line for line in lines)
+        mapped, is_daily = self._validate_ma_lines(lines)
         table_name = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
-
-        mapped = [self._validate_ma_line(line) for line in lines]
         threshold = self._validate_threshold(threshold)
 
         max_candles = 390 if not is_daily else 300
@@ -623,7 +622,11 @@ class ScreenerEngine:
 
         main_table = "daily_ohlcv" if is_daily else "minute_ohlcv"
         ma_table = "daily_ma" if is_daily else "minute_ma"
-        order_desc = "date DESC" if is_daily else "date DESC, time DESC"
+        join_keys = "d.ticker = m.ticker AND d.date = m.date"
+        order_desc = "d.date DESC"
+        if not is_daily:
+            join_keys += " AND d.time = m.time"
+            order_desc += ", d.time DESC"
 
         from core.database import _MA_MEM_DB_URI, connect_sqlite
 
@@ -645,34 +648,21 @@ class ScreenerEngine:
             conn.execute(f"ATTACH DATABASE '{_MA_MEM_DB_URI}' AS madb")
 
             placeholders = ", ".join("?" for _ in current_tickers.keys())
-            query_params = list(current_tickers.keys())
-            query_params.extend(current_tickers.keys())
-            query_params.append(threshold)
+            query_params = [*current_tickers.keys(), threshold]
 
             query = f"""
-            WITH latest_main AS (
-                SELECT ticker, close
-                FROM (
-                    SELECT ticker, close,
-                           ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
-                    FROM {main_table}
-                    WHERE ticker IN ({placeholders})
-                ) WHERE rn = 1
-            ),
-            latest_ma AS (
-                SELECT ticker, {valid_line}
-                FROM (
-                    SELECT ticker, {valid_line},
-                           ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
-                    FROM madb.{ma_table}
-                    WHERE ticker IN ({placeholders})
-                ) WHERE rn = 1
+            WITH matched AS (
+                SELECT d.ticker, d.close, m.{valid_line},
+                       ROW_NUMBER() OVER(PARTITION BY d.ticker ORDER BY {order_desc}) as rn
+                FROM {main_table} d
+                JOIN madb.{ma_table} m ON {join_keys}
+                WHERE d.ticker IN ({placeholders})
+                  AND m.{valid_line} IS NOT NULL
             )
-            SELECT d.ticker, (CAST(d.close AS REAL) / NULLIF(m.{valid_line}, 0)) * 100.0 as disparity
-            FROM latest_main d
-            JOIN latest_ma m ON d.ticker = m.ticker
-            WHERE m.{valid_line} IS NOT NULL
-              AND (CAST(d.close AS REAL) / NULLIF(m.{valid_line}, 0)) * 100.0 {operator} ?
+            SELECT ticker, (CAST(close AS REAL) / NULLIF({valid_line}, 0)) * 100.0 as disparity
+            FROM matched
+            WHERE rn = 1
+              AND (CAST(close AS REAL) / NULLIF({valid_line}, 0)) * 100.0 {operator} ?
             """
 
             return {
@@ -702,6 +692,7 @@ class ScreenerEngine:
         is_daily = "M" in lookback
         table_name = "daily_ohlcv" if is_daily else "minute_ohlcv"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
+        time_select = "0 AS time" if is_daily else "time"
 
         duration = {"1M": 30, "3M": 60, "2H": 120, "4H": 240}[lookback]
 
@@ -727,7 +718,8 @@ class ScreenerEngine:
 
             query = f"""
             WITH recent_data AS (
-                SELECT ticker, close, high, volume, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
+                SELECT ticker, date, {time_select}, close, high, volume,
+                       ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY {order_desc}) as rn
                 FROM {table_name}
                 WHERE ticker IN ({placeholders})
             ),
@@ -739,9 +731,13 @@ class ScreenerEngine:
             max_volume_candle AS (
                 SELECT ticker, high as max_vol_high
                 FROM (
-                    SELECT ticker, high, ROW_NUMBER() OVER(PARTITION BY ticker ORDER BY volume DESC) as v_rn
+                    SELECT ticker, high,
+                           ROW_NUMBER() OVER(
+                               PARTITION BY ticker
+                               ORDER BY volume DESC, date DESC, time DESC
+                           ) as v_rn
                     FROM recent_data
-                    WHERE rn <= {duration}
+                    WHERE rn BETWEEN 2 AND {duration + 1}
                 ) WHERE v_rn = 1
             )
             SELECT l.ticker, ((l.close - m.max_vol_high) * 100.0 / NULLIF(m.max_vol_high, 0)) as breakout_rate

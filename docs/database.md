@@ -44,7 +44,7 @@
 - `minute_ma` 기본 키: `(ticker, date, time)`
 - 값은 `REAL`, 준비되지 않은 기간은 `NULL`
 
-`MACalculator`는 종목별 `deque(maxlen=200)`를 사용한다. 부트스트랩은 OHLCV를 시간 오름차순으로 순회해 MA를 bulk insert하며, 장중 수집기는 새 종가를 같은 계산기에 밀어 넣는다.
+`MACalculator`는 종목별 `deque(maxlen=200)`를 사용한다. 부트스트랩은 OHLCV를 시간 오름차순으로 순회해 MA를 bulk insert한다. 분봉 수집기는 새 종가를 같은 계산기에 밀어 넣고, 중복 범위를 upsert하는 일봉 수집기는 해당 종목의 canonical OHLCV에서 MA를 다시 계산해 멱등성을 보장한다.
 
 ## 연결 수명주기
 
