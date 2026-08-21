@@ -116,7 +116,7 @@ npx tsc --noEmit
 npm run build
 ```
 
-현재 독립 자동 테스트 스위트는 없다. 테스트를 추가하기 전까지 Ruff, TypeScript, ESLint, 프로덕션 빌드와 영향 경로의 수동 검증을 최소 완료 조건으로 삼는다.
+백엔드 회귀 테스트는 `uv run python -m unittest discover -s tests -v`로 실행한다. Ruff, 회귀 테스트, TypeScript, ESLint, 프로덕션 빌드와 영향 경로의 수동 검증을 최소 완료 조건으로 삼는다.
 
 ## 7. 작업 완료 기준
 

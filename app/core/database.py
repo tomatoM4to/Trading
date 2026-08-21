@@ -270,3 +270,4 @@ def sync_memory_to_disk(mem_conn: sqlite3.Connection | None = None) -> None:
         log_func(f"[DB SYNC] Memory perfectly synced to disk: {disk_path.name}")
     except Exception as e:
         logger.error(f"[DB SYNC] Failed to sync to disk: {e}")
+        raise

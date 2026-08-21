@@ -15,6 +15,7 @@
 | `SCHED` | `False` | 스케줄러와 전체 부트스트랩 실행 여부 |
 | `LOG_LEVEL` | 로깅 구현 기본값 | 애플리케이션 로그 레벨 |
 | `SQLITE_DB_PATH` | `data/trading.db` | 영속 DB 파일 경로 override |
+| `ADMIN_API_KEY` | 없음 | `/admin/*` 요청의 `X-Admin-Key`와 비교할 관리자 비밀값. 미설정 시 관리자 API 503 |
 | `DOMAIN` | 없음 | Docker Compose Nginx 템플릿 도메인 |
 | `EMAIL` | 없음 | 초기 인증서 발급 연락처 |
 
@@ -34,6 +35,7 @@ LOG_LEVEL=DEBUG
 DEBUG=False
 SCHED=True
 LOG_LEVEL=INFO
+ADMIN_API_KEY=충분히-긴-무작위-비밀값
 ```
 
 ## `kis_devlp.yaml`

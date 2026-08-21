@@ -34,6 +34,7 @@ KIS 통합은 `app/core/kis_auth.py`의 인증과 `app/core/kis_fetch.py`의 데
 - 시작: FastAPI lifespan의 `start_q_worker()`
 - 지연 시작: 큐가 없는 상태에서 `async_kis_fetch()`가 호출돼도 자동 시작
 - 종료: lifespan의 `stop_q_worker()`가 태스크를 cancel하고 종료를 기다림
+- 종료 후 큐와 워커 참조를 함께 초기화하므로 같은 프로세스에서도 안전하게 다시 시작할 수 있음
 
 ## 응답 래퍼
 
@@ -49,7 +50,7 @@ KIS 통합은 `app/core/kis_auth.py`의 인증과 `app/core/kis_fetch.py`의 데
 
 - KIS 요청은 전역 큐를 우회하지 않는다.
 - 일반 호출은 `timeout=10`, 인증은 `timeout=30`을 유지한다.
-- 로그에 앱 시크릿, 토큰, 계좌 전체 값이 남지 않도록 한다.
+- 요청 로그의 authorization, appkey, appsecret, token 계열 값은 `***`로 마스킹한다. 계좌 전체 값도 기록하지 않는다.
 - TR ID와 파라미터는 `open-trading-api/`의 공식 예제를 참고하되 애플리케이션 스키마로 검증한다.
 - 투자자 랭킹 `FHPTJ04400000`은 최대 30개 응답만 사용한다.
 - 재시도 정책을 추가할 때는 큐 점유, 중복 요청, 장중 지연을 함께 제한한다.

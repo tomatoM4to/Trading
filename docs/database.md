@@ -17,6 +17,7 @@
 `init_sqlite_connection()`은 디스크 DB가 있으면 SQLite backup API로 주 메모리 DB에 복원한 후 `_USE_IN_MEMORY=True`로 전환한다. 이후 `connect_sqlite()`가 만드는 모든 일반 연결은 메모리 DB를 가리킨다.
 
 `sync_memory_to_disk()`는 메모리 DB를 디스크 파일로 backup한다. 기본 경로보다 `test_db_var`, `SQLITE_DB_PATH`가 우선한다. 디스크 연결에는 WAL과 `synchronous=NORMAL`을 적용한다.
+백업 실패는 로그를 남긴 뒤 호출자에게 예외를 다시 전달하므로 스케줄러와 관리자 작업이 성공으로 오인하지 않는다.
 
 ## 주 테이블
 

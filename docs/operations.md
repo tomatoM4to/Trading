@@ -21,6 +21,8 @@
 - 전체: `GET /admin/live/global-status?data_type=daily|minute`
 - 종목: `GET /admin/live/ticker-status/{ticker}?data_type=daily|minute`
 
+모든 `/admin/*` 요청에는 `X-Admin-Key: <ADMIN_API_KEY>` 헤더가 필요하다.
+
 최신 날짜·시간과 보유 행 수를 확인해 수집 지연을 판단한다.
 
 ## 시스템 가드 해석
@@ -42,10 +44,10 @@
 
 ## 운영 보안 경고
 
-현재 `/admin/*`, `/docs`, `/redoc`은 애플리케이션 또는 Nginx 인증이 없다. 운영 서버를 공용 인터넷에 노출한다면 다음 중 하나 이상이 필요하다.
+`/admin/*`은 애플리케이션 API 키로 보호된다. `/docs`, `/redoc`은 인증이 없으므로 운영 서버를 공용 인터넷에 노출한다면 다음 중 하나 이상을 추가로 적용한다.
 
 - Nginx IP allowlist
-- 관리자 bearer token dependency
+- 관리자 경로에 대한 Nginx 추가 인증
 - VPN 또는 private network
 - 운영 빌드에서 test router 제외
 - API 문서 비활성화 또는 인증
@@ -70,7 +72,13 @@ npx tsc --noEmit
 npm run build
 ```
 
-현재 `pytest` 또는 프론트엔드 테스트 러너 기반의 자동 테스트 스위트는 없다. 다음 영역은 우선 테스트 대상으로 본다.
+표준 `unittest` 기반 회귀 테스트는 다음 명령으로 실행한다.
+
+```powershell
+uv run python -m unittest discover -s tests -v
+```
+
+다음 영역은 추가 테스트 대상으로 본다.
 
 - 스크리너 입력 검증과 AND/OR 의미론
 - 일봉/분봉 테이블 선택
@@ -92,9 +100,7 @@ npm run build
 
 ## 알려진 운영 위험
 
-- 관리자 API와 API 문서가 인증 없이 노출된다.
+- API 문서가 인증 없이 노출된다.
 - 배포 전에 자동 품질 게이트가 없다.
 - Compose 배포가 컨테이너를 먼저 내리므로 중단 시간이 있다.
-- 부트스트랩 백그라운드 태스크를 lifespan 종료에서 추적하지 않는다.
-- 자동 회귀 테스트가 없다.
-- 스크리너의 일부 입력 검증과 일봉 이격도 선택에 알려진 결함이 있다.
+- AST AND/OR 의미론과 수집 파이프라인 전반의 자동 회귀 테스트가 부족하다.

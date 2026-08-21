@@ -1,3 +1,4 @@
+import math
 from typing import Any
 
 from schemas.screener import FilterNode, ScreenerRequest
@@ -7,10 +8,39 @@ class ScreenerEngine:
     VALID_MA_PERIODS = {"5", "10", "20", "60", "120", "200"}
 
     def _validate_ma_line(self, line: str) -> str:
-        val = str(line).split("_")[-1]
+        raw_line = str(line)
+        if raw_line.startswith("ma_daily_"):
+            val = raw_line.removeprefix("ma_daily_")
+        elif raw_line.startswith("ma"):
+            val = raw_line.removeprefix("ma")
+        else:
+            raise ValueError(f"유효하지 않은 MA 식별자입니다: {line}")
         if val not in self.VALID_MA_PERIODS:
             raise ValueError(f"유효하지 않은 MA 기간입니다: {line}")
         return f"ma{val}"
+
+    def _is_daily_line(self, line: str) -> bool:
+        return str(line).startswith("ma_daily_")
+
+    def _validate_threshold(self, threshold: Any, max_val: float = 100.0) -> float:
+        if isinstance(threshold, bool):
+            raise ValueError("임계값은 숫자여야 합니다.")
+        try:
+            value = float(threshold)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("임계값은 숫자여야 합니다.") from exc
+        if not math.isfinite(value) or not (0.0 <= value <= max_val):
+            raise ValueError(f"임계값은 0~{max_val:g} 범위의 유한한 숫자여야 합니다.")
+        return value
+
+    def _validate_rank_limit(self, limit: Any) -> int:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not (1 <= limit <= 30)
+        ):
+            raise ValueError("투자자 랭킹 limit은 1~30 범위의 정수여야 합니다.")
+        return limit
 
     def _validate_duration(self, duration: int, max_val: int = 500) -> int:
         if not isinstance(duration, int) or not (1 <= duration <= max_val):
@@ -451,6 +481,7 @@ class ScreenerEngine:
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
         mapped = [self._validate_ma_line(line) for line in lines]
+        threshold = self._validate_threshold(threshold)
 
         max_candles = 390 if not is_daily else 300
         duration = self._validate_duration(duration, max_candles)
@@ -458,7 +489,7 @@ class ScreenerEngine:
         max_func = f"MAX({', '.join(mapped)})"
         min_func = f"MIN({', '.join(mapped)})"
         diff_val = f"(({max_func} - {min_func}) * 100.0 / NULLIF({min_func}, 0))"
-        convergence_cond = f"( {diff_val} <= {threshold} )"
+        convergence_cond = f"( {diff_val} <= ? )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
         from core.database import connect_ma_db, connect_sqlite
@@ -474,7 +505,7 @@ class ScreenerEngine:
         if not current_tickers:
             return {}
         placeholders = ", ".join("?" for _ in current_tickers.keys())
-        query_params = tuple(current_tickers.keys())
+        query_params = (*current_tickers.keys(), threshold)
 
         query = f"""
         WITH recent_ma AS (
@@ -518,6 +549,7 @@ class ScreenerEngine:
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
 
         mapped = [self._validate_ma_line(line) for line in lines]
+        threshold = self._validate_threshold(threshold)
 
         max_candles = 390 if not is_daily else 300
         within = self._validate_duration(within, max_candles)
@@ -525,7 +557,7 @@ class ScreenerEngine:
         max_func = f"MAX({', '.join(mapped)})"
         min_func = f"MIN({', '.join(mapped)})"
         diff_val = f"(({max_func} - {min_func}) * 100.0 / NULLIF({min_func}, 0))"
-        convergence_cond = f"( {diff_val} <= {threshold} )"
+        convergence_cond = f"( {diff_val} <= ? )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
         from core.database import connect_ma_db, connect_sqlite
@@ -541,7 +573,7 @@ class ScreenerEngine:
         if not current_tickers:
             return {}
         placeholders = ", ".join("?" for _ in current_tickers.keys())
-        query_params = tuple(current_tickers.keys())
+        query_params = (*current_tickers.keys(), threshold)
 
         query = f"""
         WITH recent_ma AS (
@@ -584,11 +616,11 @@ class ScreenerEngine:
                 f"disparity_value 파라미터 오류: line, threshold, direction(above/below) 필수. (입력: {params})"
             )
 
+        is_daily = self._is_daily_line(line)
         valid_line = self._validate_ma_line(line)
         operator = "<=" if direction == "below" else ">="
-        threshold = float(threshold)
+        threshold = self._validate_threshold(threshold, max_val=1000.0)
 
-        is_daily = "daily" in valid_line
         main_table = "daily_ohlcv" if is_daily else "minute_ohlcv"
         ma_table = "daily_ma" if is_daily else "minute_ma"
         order_desc = "date DESC" if is_daily else "date DESC, time DESC"
@@ -734,6 +766,7 @@ class ScreenerEngine:
         """
         from core.kis_fetch import async_kis_fetch
 
+        limit = self._validate_rank_limit(limit)
         tickers = []
 
         params = {
@@ -783,6 +816,7 @@ class ScreenerEngine:
     ) -> dict[str, dict[str, float]]:
         """외국인 순매수 상위 필터"""
         limit = params.get("limit", 30)
+        limit = self._validate_rank_limit(limit)
         res = await self._fetch_investor_rank(
             etc_cls_code="1", filter_id=filter_id, limit=limit
         )
@@ -798,6 +832,7 @@ class ScreenerEngine:
     ) -> dict[str, dict[str, float]]:
         """기관 순매수 상위 필터"""
         limit = params.get("limit", 30)
+        limit = self._validate_rank_limit(limit)
         res = await self._fetch_investor_rank(
             etc_cls_code="2", filter_id=filter_id, limit=limit
         )
