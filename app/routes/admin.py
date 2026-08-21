@@ -2,6 +2,7 @@ import sqlite3
 from enum import StrEnum
 
 from core.database import get_db
+from core.dependencies import verify_admin_api_key
 from fastapi import APIRouter, Depends
 from services.admin_live_service import (
     get_global_status_service,
@@ -12,7 +13,7 @@ from services.admin_test_service import (
     test_minute_scheduler_integration_service,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_admin_api_key)])
 test_router = APIRouter(prefix="/admin/test", tags=["Admin (Test)"])
 live_router = APIRouter(prefix="/admin/live", tags=["Admin (Live Status)"])
 action_router = APIRouter(prefix="/admin/action", tags=["Admin (Actions)"])

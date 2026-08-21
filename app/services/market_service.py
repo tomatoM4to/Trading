@@ -78,6 +78,7 @@ async def get_chart_data(
                     open, high, low, close, volume,
                     close as ma_daily_1,
                     CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) = 5 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_5,
+                    CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) = 10 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_10,
                     CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) = 20 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_20,
                     CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) = 60 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_60,
                     CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_120,
@@ -111,6 +112,7 @@ async def get_chart_data(
                         ma200=None,
                         ma_daily_1=r["ma_daily_1"],
                         ma_daily_5=r["ma_daily_5"],
+                        ma_daily_10=r["ma_daily_10"],
                         ma_daily_20=r["ma_daily_20"],
                         ma_daily_60=r["ma_daily_60"],
                         ma_daily_120=r["ma_daily_120"],
@@ -134,6 +136,7 @@ async def get_chart_data(
                         date,
                         close as ma_daily_1,
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) = 5 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_5,
+                        CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) = 10 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_10,
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) = 20 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_20,
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) = 60 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_60,
                         CASE WHEN COUNT(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) = 120 THEN AVG(close) OVER (ORDER BY date ASC ROWS BETWEEN 119 PRECEDING AND CURRENT ROW) ELSE NULL END as ma_daily_120,
@@ -158,7 +161,7 @@ async def get_chart_data(
                 SELECT
                     m.date, m.time, m.open, m.high, m.low, m.close, m.volume,
                     m.ma5, m.ma10, m.ma20, m.ma60, m.ma120, m.ma200,
-                    d.ma_daily_1, d.ma_daily_5, d.ma_daily_20, d.ma_daily_60, d.ma_daily_120, d.ma_daily_200
+                    d.ma_daily_1, d.ma_daily_5, d.ma_daily_10, d.ma_daily_20, d.ma_daily_60, d.ma_daily_120, d.ma_daily_200
                 FROM minute_ma m
                 LEFT JOIN daily_ma d ON m.date = d.date
                 WHERE m.date >= ?
@@ -189,6 +192,7 @@ async def get_chart_data(
                         ma200=r["ma200"],
                         ma_daily_1=r["ma_daily_1"],
                         ma_daily_5=r["ma_daily_5"],
+                        ma_daily_10=r["ma_daily_10"],
                         ma_daily_20=r["ma_daily_20"],
                         ma_daily_60=r["ma_daily_60"],
                         ma_daily_120=r["ma_daily_120"],

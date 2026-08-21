@@ -16,6 +16,15 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+async def cancel_background_tasks(tasks: list[asyncio.Task]) -> None:
+    """Cancel and await application-owned background tasks during shutdown."""
+    active_tasks = [task for task in tasks if not task.done()]
+    for task in active_tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import os
@@ -53,6 +62,7 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(auth, force=True)
 
     system_scheduler = None
+    background_tasks: list[asyncio.Task] = []
 
     # 2. 백그라운드 스케줄러 & 부트스트랩 제어
     if is_sched:
@@ -63,7 +73,7 @@ async def lifespan(app: FastAPI):
         system_scheduler.start()
 
         # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
-        asyncio.create_task(run_bootstrap_pipeline())
+        background_tasks.append(asyncio.create_task(run_bootstrap_pipeline()))
     else:
         logger.sched(
             "SCHED mode is OFF: Skipping background scheduler and bootstrap tasks."
@@ -74,15 +84,16 @@ async def lifespan(app: FastAPI):
         logger.info(
             "[Memory DB] Hydrating In-Memory MA Database from disk (SCHED=False)..."
         )
-        asyncio.create_task(rebuild_ma_database())
+        background_tasks.append(asyncio.create_task(rebuild_ma_database()))
 
     yield  # Application runs here
 
     # Shutdown code
     logger.info("Application shutting down...")
-    await stop_q_worker()
     if system_scheduler:
         system_scheduler.stop()
+    await cancel_background_tasks(background_tasks)
+    await stop_q_worker()
 
 
 app = FastAPI(

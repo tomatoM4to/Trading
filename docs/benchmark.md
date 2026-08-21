@@ -40,9 +40,9 @@ uv run python scripts/benchmark_screener.py --host http://localhost:8000
 실행이 완료되면 루트 디렉토리에 `screener_benchmark_YYYYMMDD_HHMMSS.csv` 형태로 결과가 저장됩니다. CSV 파일에는 시나리오명, 소요 시간(초), 검색된 종목 수(Tickers Found), 성공/실패 여부가 기록됩니다.
 
 ### 주요 결과 해석
-- **0.1초 미만의 비정상적인 종료**: 과거 발생했던 "Short-circuit" 버그와 같이 잘못된 쿼리로 인해 결과가 즉시 빈 값으로 반환된 경우입니다. (ADR-021 적용으로 현재는 해결 및 400 에러 처리됨)
+- **0.1초 미만의 비정상적인 종료**: 잘못된 쿼리로 인해 결과가 즉시 빈 값으로 반환된 과거 short-circuit 사례일 수 있습니다. 현재 입력 계약은 [`screener.md`](screener.md)를 따릅니다.
 - **정상적인 연산 소요 시간**: SQLite의 풀스캔 및 윈도우 함수 처리로 인해 시나리오의 무거움에 따라 수 초에서 ~30초 가량이 정상적인 소요 시간입니다.
-- **최적화 지표 (In-Memory 도입 완료)**: 물리 디스크 I/O 병목을 제거하기 위해 `file::memory:?cache=shared` 기반의 100% In-Memory DB 아키텍처가 전면 적용되었습니다 (참고: ADR-022). 본 벤치마크를 통해 디스크 기반 연산 대비 소요 시간(Duration)이 수백 밀리초 수준으로 얼마나 획기적으로 줄어들었는지 직접 확인할 수 있습니다.
+- **최적화 지표 (In-Memory 도입 완료)**: 물리 디스크 I/O 병목을 줄이기 위해 `file::memory:?cache=shared` 기반 주 DB를 사용합니다. 현재 구조는 [`database.md`](database.md)를 참고합니다.
 
 ## 5. 벤치마크 결과 히스토리
 서버(Oracle Cloud 1GB RAM)와 로컬 환경에서 점진적인 아키텍처 최적화를 수행하며 측정한 결과들입니다.
@@ -67,7 +67,7 @@ uv run python scripts/benchmark_screener.py --host http://localhost:8000
 - [screener_benchmark_20260806_185510.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260806_185510.csv)
 
 5. 인메모리 MA 엔진 도입 전 (서버 베이스라인 재측정)
-- 참고: ADR-026(파이썬 MA 엔진) 도입 직전에 측정한 서버 성능입니다. 분봉 윈도우 풀스캔 연산(Light 2, Light 4) 시 여전히 약 28~30초의 지연 시간이 발생합니다.
+- 참고: 현재 파이썬 MA 엔진 도입 직전에 측정한 과거 서버 성능입니다. 분봉 윈도우 풀스캔 연산(Light 2, Light 4) 시 약 28~30초가 소요됐습니다.
 - [screener_benchmark_20260808_213722.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_213722.csv)
 
 6. 인메모리 MA 도입 후
@@ -94,9 +94,9 @@ uv run python scripts/benchmark_screener.py --host http://localhost:8000
 - [screener_benchmark_20260805_215923.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260805_215923.csv)
 
 5. 인메모리 MA 엔진 도입 전 (로컬 베이스라인 재측정)
-- 참고: ADR-026(파이썬 MA 엔진) 도입 직전에 측정한 로컬 성능입니다. 분봉 윈도우 풀스캔 시 약 2.9초가 소요됩니다.
+- 참고: 현재 파이썬 MA 엔진 도입 직전에 측정한 과거 로컬 성능입니다. 분봉 윈도우 풀스캔 시 약 2.9초가 소요됐습니다.
 - [screener_benchmark_20260808_215546.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_215546.csv)
 
-6. 순수 파이썬 인메모리 MA 엔진 전면 적용 (ADR-026)
+6. 순수 파이썬 인메모리 MA 엔진 전면 적용
 - 최적화 성과: 무거운 SQLite 윈도우 함수 연산을 완전히 덜어내고, 파이썬 객체 기반의 O(1) 캐시와 전용 메모리 MA 테이블을 구축한 최종 벤치마크 결과입니다. 가장 무거운 분봉 윈도우 풀스캔 쿼리(Light 2, 4) 기준 **2.9초 → 1.4초(약 50% 단축)**로 극적인 성능 향상을 보였으며 물리 디스크 I/O를 원천 차단했습니다.
 - [screener_benchmark_20260808_222427.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_222427.csv)

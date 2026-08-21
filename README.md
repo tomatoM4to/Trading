@@ -54,7 +54,9 @@ Oracle Cloud Free Tier(1 OCPU / 1GB RAM)의 자원 제약을 극복하기 위해
 ---
 
 ## 📚 관련 기술 문서
-- 전체 파이프라인 및 Docker 구조: [`docs/cicd.md`](./docs/cicd.md)
-- SQLite 영속성 마운트 전략 (ADR): [`docs/decisions/ADR-005-docker-sqlite-persistence-strategy.md`](./docs/decisions/ADR-005-docker-sqlite-persistence-strategy.md)
-- 백그라운드 스케줄러 명세: [`docs/scheduler.md`](./docs/scheduler.md)
-- DB 및 스키마 설계: [`docs/database.md`](./docs/database.md)
+
+- 문서 전체 지도: [`docs/README.md`](./docs/README.md)
+- 시스템 아키텍처: [`docs/architecture.md`](./docs/architecture.md)
+- 배포 및 Docker 구조: [`docs/deployment.md`](./docs/deployment.md)
+- 백그라운드 스케줄러: [`docs/scheduler.md`](./docs/scheduler.md)
+- DB와 메모리 모델: [`docs/database.md`](./docs/database.md)

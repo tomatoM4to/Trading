@@ -1,93 +1,90 @@
-# 환경 변수 및 설정 파일 가이드
+# 환경 설정과 로컬 실행
 
-본 문서는 Trading Server의 동작 방식을 제어하는 `.env` 파일과 KIS OpenAPI 접속 정보를 담고 있는 `kis_devlp.yaml` 파일의 역할 및 설정 방법에 대해 설명합니다.
+## 요구 사항
 
----
+- Python 3.12 이상
+- uv
+- Node.js와 npm
+- KIS 실전투자 API 자격 증명
 
-## 1. 실행 모드 환경 변수 상세 (`.env`)
+## `.env`
 
-`.env` 파일은 코드 수정 없이 로컬 개발, 디버깅, 실전 운영 모드를 유연하게 전환하는 역할을 합니다.
+| 변수 | 기본값 | 역할 |
+|---|---|---|
+| `DEBUG` | `False` | `True`면 캐시 토큰 재사용, `False`면 시작 시 강제 재발급 |
+| `SCHED` | `False` | 스케줄러와 전체 부트스트랩 실행 여부 |
+| `LOG_LEVEL` | 로깅 구현 기본값 | 애플리케이션 로그 레벨 |
+| `SQLITE_DB_PATH` | `data/trading.db` | 영속 DB 파일 경로 override |
+| `ADMIN_API_KEY` | 없음 | `/admin/*` 요청의 `X-Admin-Key`와 비교할 관리자 비밀값. 미설정 시 관리자 API 503 |
+| `DOMAIN` | 없음 | Docker Compose Nginx 템플릿 도메인 |
+| `EMAIL` | 없음 | 초기 인증서 발급 연락처 |
 
-### `DEBUG`
-**KIS OpenAPI 인증 토큰의 발급 방식(캐싱 여부)**을 결정합니다. API 호출 한도 낭비를 막고 서버 부팅 속도를 높이기 위해 설계되었습니다.
+`DEBUG`와 `SCHED`는 독립적이다. `DEBUG`는 인증 정책만, `SCHED`는 예약 작업과 부트스트랩만 제어한다.
 
-- **`True` (또는 `1`, `t`, `yes`)**: 
-  - **동작**: 기존에 발급받아 로컬 파일(`KISYYYYMMDD` 등)에 저장된 유효한 토큰을 우선적으로 재사용(`force=False`)합니다. 
-  - **용도**: 잦은 서버 재시작이 발생하는 로컬 개발 및 단건 API 테스트 환경.
-- **`False` (또는 `0`, `f`, `no`)**: 
-  - **동작**: 캐시된 파일이 있더라도 무시하고 무조건 KIS API 서버와 통신하여 새로운 토큰을 강제로 재발급(`force=True`) 받습니다.
-  - **용도**: 혹시 모를 토큰 만료나 꼬임 현상을 방지해야 하는 실전 운영(Production) 배포 환경.
+권장 로컬 설정:
 
-### `SCHED`
-**백그라운드 통합 스케줄러(`SystemScheduler`) 및 데이터 적재 파이프라인의 가동 여부**를 결정합니다. 1GB RAM 환경에서 무거운 배치 작업이 테스트를 방해하는 것을 막기 위해 설계되었습니다.
-
-- **`True`**: 
-  - **동작**: 앱 부팅 시 `SystemScheduler`를 시작하고 장중/야간 스케줄 작업 및 부트스트랩 파이프라인(과거 데이터 빈 공간 채우기 등)을 전면 가동합니다.
-  - **용도**: 실제 데이터를 수집하고 정기적인 가비지 컬렉션을 수행해야 하는 실전 운영 환경.
-- **`False`**: 
-  - **동작**: 백그라운드 스케줄러가 전혀 기동되지 않으며, FastAPI의 웹 서버(API 라우터) 기능만 가볍게 띄웁니다.
-  - **용도**: UI 프론트엔드 연동 테스트, 새로운 엔드포인트 디버깅 등 무거운 백그라운드 데이터 수집이 필요 없는 환경.
-
-### `LOG_LEVEL`
-**앱 전반의 기본 로그 출력 수준**을 결정합니다. (기본값: `INFO`)
-
-- **`INFO`**: 앱 기동 상태 및 백그라운드 작업 시작/종료 등 정상적인 동작 흐름을 모두 터미널에 출력합니다. (권장)
-- **`WARNING`**: 치명적인 경고나 에러만 출력하여 디스크 I/O와 화면 노이즈를 최소화합니다.
-
----
-
-## 2. 권장 설정 조합 (Playbooks)
-
-### 🚀 로컬 API 단건 테스트 모드 (가장 가벼움)
-```env
+```dotenv
 DEBUG=True
 SCHED=False
-LOG_LEVEL=INFO
+LOG_LEVEL=DEBUG
 ```
-- **효과**: 기존 토큰을 재사용하여 서버가 1초 만에 즉시 부팅됩니다. 무거운 스케줄러가 돌지 않아 CPU/RAM 점유가 0에 가까우며, 엔드포인트(`/admin/test` 등) 단건 테스트에 적합합니다.
 
-### 🏭 실전 운영 모드 (Production)
-```env
+운영 설정:
+
+```dotenv
 DEBUG=False
 SCHED=True
 LOG_LEVEL=INFO
+ADMIN_API_KEY=충분히-긴-무작위-비밀값
 ```
-- **효과**: 무조건 새 인증 토큰을 발급받아 시작하며, 무거운 부트스트랩 파이프라인과 정규 스케줄러가 백그라운드에서 완벽하게 동작합니다. 
 
-### 🛠️ 백그라운드 워커 디버깅 모드
-```env
-DEBUG=True
-SCHED=True
-LOG_LEVEL=INFO
+## `kis_devlp.yaml`
+
+현재 애플리케이션에 필요한 핵심 값은 다음과 같다.
+
+```yaml
+my_app: "실전 앱 키"
+my_sec: "실전 앱 시크릿"
+my_htsid: "HTS ID"
+my_acct_stock: "8자리 계좌번호"
+my_prod: "01"
+prod: "https://openapi.koreainvestment.com:9443"
+ops: "ws://ops.koreainvestment.com:21000"
+vps: "https://openapivts.koreainvestment.com:29443"
+vops: "ws://ops.koreainvestment.com:31000"
+my_token: ""
+my_agent: "사용자 에이전트"
 ```
-- **효과**: 서버 부팅 속도는 높이되(토큰 캐시), 백그라운드 워커의 수집/처리 로직 자체를 검증하고 싶을 때 사용합니다.
 
----
+Pydantic 모델에는 일부 모의·선물 계좌 필드가 남아 있지만 현재 인증과 운영 경로는 실전 REST URL과 실전 자격 증명을 사용한다.
 
-## 3. KIS API 접속 설정 (`kis_devlp.yaml`)
+## 백엔드 실행
 
-`kis_devlp.yaml` 파일은 **한국투자증권(KIS) OpenAPI와의 통신에 필요한 인증 인가 정보 및 고정 설정값**을 담고 있습니다. 
-보안상 Git 저장소에 업로드되지 않으며, 배포 시 `.github/workflows`의 Github Secrets를 통해 OCI 서버에 자동 생성(동적 주입)됩니다.
+```powershell
+uv sync
+uv run fastapi dev app/main.py
+```
 
-### 주요 파라미터 역할
+로컬에서도 시작 과정에서 KIS 인증을 수행한다. 유효한 설정과 토큰 캐시가 없으면 앱이 기동하지 않을 수 있다.
 
-#### 🔐 인증 정보 (Credentials)
-- **`my_app`**: 발급받은 실전투자용 App Key. API 서버가 누구의 요청인지 식별하는 ID 역할.
-- **`my_sec`**: 발급받은 실전투자용 App Secret. API 서버가 요청을 인가하는 비밀번호 역할.
-- **`my_htsid`**: 본인의 한국투자증권 HTS 접속 ID. (특정 주문 API 등에서 검증용으로 사용)
-- **`my_agent`**: API 요청 헤더에 포함될 `User-Agent`. (브라우저 문자열로 설정하여 봇 차단 우회)
+## 프론트엔드 실행
 
-#### 🏦 계좌 정보 (Account Routing)
-한국투자증권의 계좌번호는 총 10자리이며, 이 시스템은 앞 8자리와 상품코드 뒤 2자리를 분리하여 동적으로 맵핑(Routing)합니다.
-- **`my_acct_stock`**: 주식 계좌번호 앞 8자리.
-- **`my_prod`**: 상품 코드 뒤 2자리. (현재 **`01` (종합계좌)** 이 기본으로 사용됨)
-  - **동작 원리**: `app/schemas/core.py`의 `KisConfig.select_account()` 로직에 의해, `my_prod`가 `01, 22, 29`면 주식계좌(`my_acct_stock`)를 불러오고, `03, 08`이면 파생(선물옵션) 계좌번호(`my_acct_future`)를 매핑하여 최종적으로 `KisEnvironment` 전역 객체에 주입합니다.
+```powershell
+cd web
+npm ci
+$env:NEXT_PUBLIC_API_URL = "http://localhost:8000"
+npm run dev
+```
 
-#### 🌐 네트워크 엔드포인트 (Endpoints)
-- **`prod`**: 실전투자용 KIS REST API 서버 주소 (`https://openapi.koreainvestment.com:9443`). 현재 앱의 모든 HTTP 요청이 이 엔드포인트를 바라봅니다.
-- **`ops`**: 실전투자용 웹소켓(WebSocket) 주소. (추후 실시간 호가 및 체결가 스트리밍 도입 시 사용)
-- *(참고)* `vps`, `vops`는 모의투자용 엔드포인트이나, 현재 프로젝트는 **실전투자 단일 모드(모의투자 배제 원칙)**로 설계되어 실제 코드(`app/core/kis_auth.py`) 상에서는 해당 값이 무시됩니다.
+백엔드 CORS에는 localhost:3000과 현재 Vercel origin이 등록돼 있다. 다른 origin을 사용할 때는 CORS 정책을 명시적으로 갱신한다.
 
-### ⚠️ 설계 및 작동 주의사항
-- **모의투자 배제 (Production Only)**: `paper_app`, `paper_sec` 등 모의투자용 키값은 YAML과 Pydantic 스키마에 정의되어 있기는 하나, 현재 인증 로직(`kis_auth.py`)은 오직 **실전 키(`my_app`, `my_sec`)만을 강제로 참조하도록 하드코딩(Hard-wiring)** 되어 있습니다. 
-- **동적 토큰 관리 방임 원칙**: YAML 내부의 `my_token` 항목이 비어있더라도 신경 쓸 필요가 없습니다. 앱 부팅 시점 및 야간 스케줄러(22시)에 의해 `auth()` 함수가 알아서 최신 토큰을 발급받고 로컬 파일(`KISYYYYMMDD`)에 캐싱한 뒤 메모리(`_kis_env`)에 적재하므로 수동 관리가 일절 불필요합니다.
+## 비밀정보
+
+다음 파일은 Git에 커밋하지 않는다.
+
+- `.env`
+- `kis_devlp.yaml`
+- `KIS20*` 토큰 캐시
+- `*.db`, `data/`
+
+설정 예시를 문서에 쓸 때도 실제 앱 키, 시크릿, 계좌번호, 토큰을 넣지 않는다.

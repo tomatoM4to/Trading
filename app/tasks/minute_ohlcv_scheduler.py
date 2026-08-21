@@ -3,8 +3,9 @@ import logging
 from datetime import datetime, timedelta
 
 import pandas as pd
-from core.database import connect_sqlite
+from core.database import MINUTE_MA_RETENTION, connect_ma_db, connect_sqlite
 from core.kis_fetch import async_kis_fetch
+from core.ma_calculator import MACalculator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -76,6 +77,52 @@ async def fetch_minute_data(
         return pd.DataFrame(pure_list)
 
     raise Exception(f"API Error: {resp.get_error_message()}")
+
+
+def rebuild_minute_ma_for_ticker(main_conn, ma_conn, ticker: str) -> None:
+    """Rebuild one ticker's retained minute MA from canonical OHLCV order."""
+    calculator = MACalculator()
+    source_limit = MINUTE_MA_RETENTION + calculator.max_period - 1
+    rows = main_conn.execute(
+        """
+        SELECT ticker, date, time, close
+        FROM (
+            SELECT ticker, date, time, close
+            FROM minute_ohlcv
+            WHERE ticker = ?
+            ORDER BY date DESC, time DESC
+            LIMIT ?
+        )
+        ORDER BY date, time
+        """,
+        (ticker, source_limit),
+    ).fetchall()
+
+    ma_records = []
+    for row in rows:
+        _, date, time, close = row
+        calculator.add_minute_close(ticker, close)
+        ma = calculator.get_minute_ma(ticker)
+        ma_records.append(
+            (
+                ticker,
+                date,
+                time,
+                ma["ma5"],
+                ma["ma10"],
+                ma["ma20"],
+                ma["ma60"],
+                ma["ma120"],
+                ma["ma200"],
+            )
+        )
+
+    ma_conn.execute("DELETE FROM minute_ma WHERE ticker = ?", (ticker,))
+    ma_conn.executemany(
+        "INSERT INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ma_records[-MINUTE_MA_RETENTION:],
+    )
+    ma_conn.commit()
 
 
 async def process_ticker(
@@ -181,36 +228,10 @@ async def process_ticker(
             df_clean["close"] = df_clean["close"].astype(int)
             df_clean["volume"] = df_clean["volume"].astype(int)
 
-            from core.database import connect_ma_db, connect_sqlite
-            from core.ma_calculator import ma_calculator
-
-            # 연산 시계열 보장을 위해 시간순(ASC) 정렬
-            df_clean = df_clean.sort_values(by=["date", "time"], ascending=[True, True])
-
             records = df_clean.to_dict("records")
-            ma_records = []
-
-            for row in records:
-                ma_calculator.add_minute_close(row["ticker"], row["close"])
-                ma = ma_calculator.get_minute_ma(row["ticker"])
-                ma_records.append(
-                    {
-                        "ticker": row["ticker"],
-                        "date": row["date"],
-                        "time": row["time"],
-                        "ma5": ma["ma5"],
-                        "ma10": ma["ma10"],
-                        "ma20": ma["ma20"],
-                        "ma60": ma["ma60"],
-                        "ma120": ma["ma120"],
-                        "ma200": ma["ma200"],
-                    }
-                )
 
             conn = connect_sqlite()
-            ma_conn = connect_ma_db()
             try:
-                # 1. OHLCV -> 디스크 DB
                 cursor = conn.cursor()
                 insert_sql = """
                     INSERT OR REPLACE INTO minute_ohlcv (
@@ -221,23 +242,11 @@ async def process_ticker(
                 """
                 cursor.executemany(insert_sql, records)
                 conn.commit()
-
-                # 2. MA -> 인메모리 DB
-                ma_cursor = ma_conn.cursor()
-                ma_insert_sql = """
-                    INSERT OR REPLACE INTO minute_ma (
-                        ticker, date, time, ma5, ma10, ma20, ma60, ma120, ma200
-                    ) VALUES (
-                        :ticker, :date, :time, :ma5, :ma10, :ma20, :ma60, :ma120, :ma200
-                    )
-                """
-                ma_cursor.executemany(ma_insert_sql, ma_records)
-                ma_conn.commit()
             except Exception as e:
                 logger.error(f"[{ticker}] DB Insert Error: {e}")
+                raise
             finally:
                 conn.close()
-                ma_conn.close()
 
         # 중복이 감지되었다면 과거 데이터를 더 뒤질 필요가 없으므로 즉시 탈출
         if is_overlap:
@@ -257,6 +266,19 @@ async def process_ticker(
             except Exception as e:
                 logger.error(f"Failed to calculate previous date for {ticker}: {e}")
                 break
+
+    if success_any:
+        conn = connect_sqlite()
+        ma_conn = connect_ma_db()
+        try:
+            rebuild_minute_ma_for_ticker(conn, ma_conn, ticker)
+        except Exception as e:
+            ma_conn.rollback()
+            success_any = False
+            logger.error(f"[{ticker}] Minute MA rebuild error: {e}")
+        finally:
+            conn.close()
+            ma_conn.close()
 
     return success_any, newest_dt
 

@@ -352,7 +352,7 @@ export function FilterBlock({ filter, status = "idle", onUpdate, onRemove }: Fil
               </div>
 
               <div className="flex-1 min-w-[100px]">
-                <label className="text-xs font-semibold text-muted-foreground mb-1 block">임계값 (%)</label>
+                <label className="text-xs font-semibold text-muted-foreground mb-1 block">이격도 지수 (100=MA 동일)</label>
                 <Input
                   type="number"
                   step="0.1"

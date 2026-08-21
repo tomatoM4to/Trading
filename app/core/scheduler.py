@@ -151,6 +151,7 @@ class SystemScheduler:
             raise
         except Exception as e:
             logger.error("Scheduled stock codes refresh failed: %s", e)
+            raise
 
     async def start_minute_scheduler_job(self) -> None:
         """장중 분봉 수집 스케줄러를 시작하는 Job."""
@@ -254,6 +255,7 @@ class SystemScheduler:
             raise
         except Exception as e:
             logger.error("OHLCV GC failed: %s", e)
+            raise
 
     async def run_daily_ohlcv_job(self) -> None:
         """오후 4시 정규 일봉 데이터 업데이트 Job."""
@@ -274,3 +276,4 @@ class SystemScheduler:
             raise
         except Exception as e:
             logger.error("Scheduled daily OHLCV update failed: %s", e)
+            raise

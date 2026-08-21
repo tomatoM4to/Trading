@@ -6,6 +6,22 @@ from core import kis_auth as ka
 
 logger = logging.getLogger(__name__)
 
+_SENSITIVE_LOG_KEYS = {
+    "authorization",
+    "appkey",
+    "appsecret",
+    "token",
+    "access_token",
+}
+
+
+def redact_headers(headers: dict) -> dict:
+    """Return a log-safe copy without KIS credentials."""
+    return {
+        key: "***" if str(key).lower() in _SENSITIVE_LOG_KEYS else value
+        for key, value in headers.items()
+    }
+
 
 class DotDict(dict):
     """
@@ -158,17 +174,20 @@ async def start_q_worker():
                 await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
-                logger.sched("[KIS Async Worker] Worker task cancelled.")
+                getattr(logger, "sched", logger.info)(
+                    "[KIS Async Worker] Worker task cancelled."
+                )
                 break
             except Exception as e:
                 logger.error(
                     "[KIS Async Worker] Unexpected error in consumer loop: %s", e
                 )
 
-    if _kis_queue is None:
-        _kis_queue = asyncio.PriorityQueue()
+    if _kis_worker_task is None or _kis_worker_task.done():
+        if _kis_queue is None:
+            _kis_queue = asyncio.PriorityQueue()
         _kis_worker_task = asyncio.create_task(request_consumer())
-        logger.sched(
+        getattr(logger, "sched", logger.info)(
             "[KIS Async Worker] Started background worker (Target: %s req/sec)",
             1 / 0.1,
         )
@@ -176,7 +195,7 @@ async def start_q_worker():
 
 async def stop_q_worker():
     """앱 종료 시 백그라운드 워커를 안전하게 종료합니다."""
-    global _kis_worker_task
+    global _kis_queue, _kis_worker_task
     if _kis_worker_task is not None:
         _kis_worker_task.cancel()
         try:
@@ -184,7 +203,10 @@ async def stop_q_worker():
         except asyncio.CancelledError:
             pass
         _kis_worker_task = None
-        logger.sched("[KIS Async Worker] Worker task stopped safely.")
+        _kis_queue = None
+        getattr(logger, "sched", logger.info)(
+            "[KIS Async Worker] Worker task stopped safely."
+        )
 
 
 def _do_fetch(
@@ -209,7 +231,7 @@ def _do_fetch(
         "< Sending Info >\nURL: %s, TR: %s\n<header>\n%s\n<body>\n%s",
         url,
         tr_id,
-        headers,
+        redact_headers(headers),
         params,
     )
 

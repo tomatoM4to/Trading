@@ -48,9 +48,13 @@ function formatKoreanCurrency(value: number | null | undefined): string {
 }
 
 // 필터 타입에 따른 정렬 방향
-function getSortType(type: string): "asc" | "desc" {
+function getSortType(filter: FilterNodeState): "asc" | "desc" {
+  if (filter.type === "disparity_value") {
+    return filter.params.direction === "above" ? "desc" : "asc";
+  }
+  const type = filter.type;
   if (type === "ma_cross" || type === "volume_peak_breakout") return "desc"; // 크로스 이격폭, 돌파율은 클수록 좋음
-  return "asc"; // 정배열 편차, 수렴 오차, 수급 순위, 이격도는 낮을수록(오름차순) 좋음
+  return "asc"; // 정배열 편차, 수렴 오차, 수급 순위는 낮을수록 좋음
 }
 
 // 필터 이름 한글화 헬퍼
@@ -62,7 +66,7 @@ function getFilterDisplayName(type: string): string {
     case "ma_convergence_point": return "수렴 지점";
     case "foreign_net_buy_rank": return "외국인 순매수";
     case "inst_net_buy_rank": return "기관 순매수";
-    case "disparity_value": return "이격도";
+    case "disparity_value": return "이격도 지수";
     case "volume_peak_breakout": return "매물대 돌파";
     default: return type;
   }
@@ -77,7 +81,7 @@ export function ScreenerResultTable({ results, onRowClick, filters = [], viewMod
 
     // 각 필터별로 등수 매기기 (Standard Competition Ranking)
     filters.forEach((filter) => {
-      const sortType = getSortType(filter.type);
+      const sortType = getSortType(filter);
       
       const sorted = [...clonedResults].sort((a, b) => {
         const valA = a.filter_values?.[filter.id] ?? (sortType === "asc" ? Infinity : -Infinity);
