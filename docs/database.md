@@ -2,21 +2,20 @@
 
 ## 저장 계층
 
-시스템은 두 개의 Shared In-Memory SQLite 데이터베이스와 하나의 디스크 파일을 사용한다.
+시스템은 주 데이터용 디스크 SQLite와 이동평균 전용 Shared In-Memory SQLite를 사용한다.
 
 | 저장소 | URI/경로 | 역할 |
 |---|---|---|
-| 주 메모리 DB | `file::memory:?cache=shared` | 종목 마스터와 OHLCV 서비스 |
+| 디스크 DB | `data/trading.db` 또는 `SQLITE_DB_PATH` | 종목 마스터와 OHLCV 정본 |
 | MA 메모리 DB | `file:ma_db?mode=memory&cache=shared` | 사전 계산 이동평균 |
-| 디스크 DB | `data/trading.db` 또는 `SQLITE_DB_PATH` | 재시작 복원용 영속 백업 |
 
-각 메모리 DB는 마지막 연결이 닫히면 사라진다. `_keepalive_conn`, `_keepalive_ma_conn`은 프로세스 수명 동안 DB를 유지하므로 제거하면 안 된다.
+MA 메모리 DB는 마지막 연결이 닫히면 사라진다. `_keepalive_ma_conn`은 프로세스 수명 동안 MA DB를 유지하므로 제거하면 안 된다. `test_mem_var`로 만든 테스트 DB는 테스트가 별도 keep-alive 연결을 소유한다.
 
 ## 시작과 동기화
 
-`init_sqlite_connection()`은 디스크 DB가 있으면 SQLite backup API로 주 메모리 DB에 복원한 후 `_USE_IN_MEMORY=True`로 전환한다. 이후 `connect_sqlite()`가 만드는 모든 일반 연결은 메모리 DB를 가리킨다.
+`init_sqlite_connection()`은 디스크 DB에 직접 연결해 WAL과 주 데이터 스키마를 보장하고, 별도로 MA Shared In-Memory DB와 keep-alive 연결을 생성한다. 이후 `connect_sqlite()`가 만드는 일반 연결은 계속 디스크 정본을 가리킨다.
 
-`sync_memory_to_disk()`는 메모리 DB를 디스크 파일로 backup한다. 기본 경로보다 `test_db_var`, `SQLITE_DB_PATH`가 우선한다. 디스크 연결에는 WAL과 `synchronous=NORMAL`을 적용한다.
+호환 이름인 `sync_memory_to_disk()`는 운영 경로에서 디스크 정본의 WAL을 체크포인트한다. 관리자 통합 테스트가 `mem_conn`을 명시적으로 전달한 경우에만 테스트 메모리 DB를 `test_db_var` 파일로 backup한다. 디스크 연결에는 WAL과 `synchronous=NORMAL`을 적용한다.
 백업 실패는 로그를 남긴 뒤 호출자에게 예외를 다시 전달하므로 스케줄러와 관리자 작업이 성공으로 오인하지 않는다.
 
 ## 주 테이블
@@ -43,8 +42,10 @@
 - `daily_ma` 기본 키: `(ticker, date)`
 - `minute_ma` 기본 키: `(ticker, date, time)`
 - 값은 `REAL`, 준비되지 않은 기간은 `NULL`
+- `daily_ma`는 스크리너 최대 300봉과 교차 직전 봉을 위해 종목당 최신 301개를 유지한다.
+- `minute_ma`는 최대 390봉과 교차 직전 봉을 위해 종목당 최신 391개를 유지한다.
 
-`MACalculator`는 종목별 `deque(maxlen=200)`를 사용한다. 부트스트랩은 OHLCV를 시간 오름차순으로 순회해 MA를 bulk insert한다. 분봉 수집기는 새 종가를 같은 계산기에 밀어 넣고, 중복 범위를 upsert하는 일봉 수집기는 해당 종목의 canonical OHLCV에서 MA를 다시 계산해 멱등성을 보장한다.
+`MACalculator`는 종목별 `deque(maxlen=200)`를 사용한다. 부트스트랩은 보존된 OHLCV 전체를 시간 오름차순으로 순회해 200일·200분선까지 계산한 다음 결과 테이블만 위 상한으로 정리한다. 분봉 수집기는 새 종가를 같은 계산기에 밀어 넣고, 중복 범위를 upsert하는 일봉 수집기는 해당 종목의 canonical OHLCV에서 MA를 다시 계산해 멱등성을 보장한다.
 
 ## 연결 수명주기
 

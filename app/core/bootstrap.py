@@ -1,7 +1,13 @@
 import asyncio
 import logging
+from collections import deque
 
-from core.database import connect_ma_db, connect_sqlite
+from core.database import (
+    DAILY_MA_RETENTION,
+    MINUTE_MA_RETENTION,
+    connect_ma_db,
+    connect_sqlite,
+)
 from core.ma_calculator import ma_calculator
 from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
 from tasks.init_stock_codes import init_stock_codes_db
@@ -28,12 +34,20 @@ async def rebuild_ma_database():
             # 2. 일봉 MA 리빌드
             logger.sched("[Bootstrap] Rebuilding daily_ma from disk...")
             cursor = disk_conn.execute(
-                "SELECT ticker, date, close FROM daily_ohlcv ORDER BY date ASC"
+                "SELECT ticker, date, close FROM daily_ohlcv ORDER BY ticker, date"
             )
 
-            ma_records = []
+            ma_records = deque(maxlen=DAILY_MA_RETENTION)
+            current_ticker = None
             for row in cursor:
                 ticker, date, close = row["ticker"], row["date"], row["close"]
+                if current_ticker is not None and ticker != current_ticker:
+                    ma_conn.executemany(
+                        "INSERT OR IGNORE INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        ma_records,
+                    )
+                    ma_records.clear()
+                current_ticker = ticker
                 ma_calculator.add_daily_close(ticker, close)
                 res = ma_calculator.get_daily_ma(ticker)
                 ma_records.append(
@@ -49,12 +63,6 @@ async def rebuild_ma_database():
                     )
                 )
 
-                if len(ma_records) >= 10000:
-                    ma_conn.executemany(
-                        "INSERT OR IGNORE INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        ma_records,
-                    )
-                    ma_records.clear()
             if ma_records:
                 ma_conn.executemany(
                     "INSERT OR IGNORE INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -79,10 +87,12 @@ async def rebuild_ma_database():
                     SELECT ticker, date, time, close
                     FROM minute_ohlcv
                     WHERE date IN ({placeholders})
-                    ORDER BY date ASC, time ASC
+                    ORDER BY ticker, date, time
                 """
                 cursor = disk_conn.execute(query, recent_dates)
 
+                ma_records = deque(maxlen=MINUTE_MA_RETENTION)
+                current_ticker = None
                 for row in cursor:
                     ticker, date, time, close = (
                         row["ticker"],
@@ -90,6 +100,13 @@ async def rebuild_ma_database():
                         row["time"],
                         row["close"],
                     )
+                    if current_ticker is not None and ticker != current_ticker:
+                        ma_conn.executemany(
+                            "INSERT OR IGNORE INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            ma_records,
+                        )
+                        ma_records.clear()
+                    current_ticker = ticker
                     ma_calculator.add_minute_close(ticker, close)
                     res = ma_calculator.get_minute_ma(ticker)
                     ma_records.append(
@@ -106,12 +123,6 @@ async def rebuild_ma_database():
                         )
                     )
 
-                    if len(ma_records) >= 10000:
-                        ma_conn.executemany(
-                            "INSERT OR IGNORE INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            ma_records,
-                        )
-                        ma_records.clear()
                 if ma_records:
                     ma_conn.executemany(
                         "INSERT OR IGNORE INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

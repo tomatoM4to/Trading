@@ -19,6 +19,7 @@ export interface ChartDataPoint {
   // 장기 이동평균선 (일봉 기준)
   ma_daily_1: number | null;
   ma_daily_5: number | null;
+  ma_daily_10: number | null;
   ma_daily_20: number | null;
   ma_daily_60: number | null;
   ma_daily_120: number | null;

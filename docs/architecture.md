@@ -10,8 +10,7 @@ Trading Server & Dashboard는 KIS OpenAPI에서 국내 종목 데이터를 수�
 KIS OpenAPI
   └─ 인증 및 전역 PriorityQueue
        └─ 수집 태스크 / 관리자 검증
-            ├─ Shared In-Memory SQLite (주 데이터)
-            │    └─ trading.db로 주기적 backup
+            ├─ SQLite trading.db (종목 마스터·OHLCV 정본, WAL)
             └─ Shared In-Memory MA DB
                  ├─ daily_ma
                  └─ minute_ma
@@ -30,7 +29,7 @@ Next.js 대시보드
 | 경로 | 책임 |
 |---|---|
 | `app/main.py` | FastAPI 생성, lifespan, CORS, 라우터 조립 |
-| `app/core/database.py` | DB 경로 결정, 연결 생성, 스키마, 메모리/디스크 동기화 |
+| `app/core/database.py` | 디스크 DB 연결·스키마·WAL 체크포인트와 MA 메모리 DB 수명주기 |
 | `app/core/kis_auth.py` | KIS 설정 로드와 OAuth 토큰 발급·캐시 |
 | `app/core/kis_fetch.py` | 모든 KIS 요청을 직렬화하는 전역 우선순위 큐 |
 | `app/core/scheduler.py` | APScheduler 작업 등록과 실행 조정 |
@@ -46,7 +45,7 @@ Next.js 대시보드
 `app/main.py`의 lifespan은 다음 순서를 따른다.
 
 1. `.env`를 로드하고 로깅을 초기화한다.
-2. 디스크 DB가 있으면 Shared In-Memory DB로 복원하고 스키마를 보장한다.
+2. 디스크 DB에 직접 연결해 WAL을 적용하고 주 데이터 스키마를 보장한 뒤 MA Shared In-Memory DB를 준비한다.
 3. KIS 전역 요청 워커를 시작한다.
 4. `DEBUG` 값에 따라 토큰을 재발급하거나 캐시를 재사용한다.
 5. `SCHED=True`면 `SystemScheduler`와 부트스트랩 파이프라인을 시작한다.

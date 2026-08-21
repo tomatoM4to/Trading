@@ -13,13 +13,9 @@ test_mem_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 
-_USE_IN_MEMORY = False
-_MEM_DB_URI = "file::memory:?cache=shared"
-_keepalive_conn = (
-    None  # in-memory DB가 초기화되지 않도록 프로세스 수명 동안 유지하는 커넥션
-)
-
 _MA_MEM_DB_URI = "file:ma_db?mode=memory&cache=shared"
+DAILY_MA_RETENTION = 301
+MINUTE_MA_RETENTION = 391
 _keepalive_ma_conn = None  # 이평선(MA) 전용 인메모리 커넥션
 
 
@@ -34,9 +30,6 @@ def get_sqlite_db_path() -> Path | str:
     test_db = test_db_var.get()
     if test_db:
         return Path(test_db).expanduser().resolve()
-
-    if _USE_IN_MEMORY:
-        return _MEM_DB_URI
 
     configured = os.getenv("SQLITE_DB_PATH")
     if configured:
@@ -68,23 +61,13 @@ def connect_sqlite() -> sqlite3.Connection:
 
 def init_sqlite_connection() -> None:
     """Validate SQLite connectivity at startup and create schema."""
-    global _USE_IN_MEMORY, _keepalive_conn, _keepalive_ma_conn
+    global _keepalive_ma_conn
 
     import logging
 
     logger = logging.getLogger(__name__)
 
-    # 물리적 DB 경로 (초기 데이터 로딩용)
-    configured = os.getenv("SQLITE_DB_PATH")
-    if configured:
-        disk_path = Path(configured).expanduser().resolve()
-    else:
-        disk_path = Path(__file__).resolve().parents[2] / "data" / "trading.db"
-
-    logger.info("Initializing in-memory shared database...")
-    # 💡 in-memory DB가 GC에 의해 삭제되지 않도록 프로세스 수명 동안 커넥션을 유지합니다.
-    _keepalive_conn = sqlite3.connect(_MEM_DB_URI, uri=True, check_same_thread=False)
-
+    # Shared In-Memory MA DB의 수명을 프로세스 종료까지 유지합니다.
     logger.info("Initializing MA dedicated in-memory database...")
     _keepalive_ma_conn = sqlite3.connect(
         _MA_MEM_DB_URI, uri=True, check_same_thread=False
@@ -92,19 +75,7 @@ def init_sqlite_connection() -> None:
     _keepalive_ma_conn.execute("PRAGMA temp_store = MEMORY")
     _keepalive_ma_conn.row_factory = sqlite3.Row
 
-    # 물리적 DB가 존재하면 in-memory DB로 데이터를 복사(Load)
-    if disk_path.exists():
-        logger.info("Loading physical DB into shared memory... This may take a moment.")
-        disk_conn = sqlite3.connect(disk_path)
-        try:
-            disk_conn.backup(_keepalive_conn)
-        finally:
-            disk_conn.close()
-        logger.info("Database loaded into memory successfully.")
-
-    # 이 시점 이후부터 생성되는 모든 커넥션은 in-memory DB를 바라보도록 설정
-    _USE_IN_MEMORY = True
-
+    # OHLCV와 종목 정보는 디스크 DB를 정본으로 사용합니다.
     conn = connect_sqlite()
     try:
         # daily_ohlcv 테이블 생성
@@ -225,8 +196,51 @@ def get_ma_db() -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
+def prune_ma_history(
+    conn: sqlite3.Connection,
+    table_name: str,
+    limit: int,
+    ticker: str | None = None,
+) -> None:
+    """Keep only the newest MA rows per ticker without committing."""
+    table_keys = {
+        "daily_ma": ("ticker", "date"),
+        "minute_ma": ("ticker", "date", "time"),
+    }
+    keys = table_keys.get(table_name)
+    if keys is None:
+        raise ValueError(f"Unsupported MA table: {table_name}")
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        raise ValueError("MA retention limit must be a positive integer")
+
+    key_list = ", ".join(keys)
+    order_by = "date DESC" if table_name == "daily_ma" else "date DESC, time DESC"
+    ticker_filter = "WHERE ticker = ?" if ticker is not None else ""
+    params: list[str | int] = [ticker] if ticker is not None else []
+    params.append(limit)
+
+    conn.execute(
+        f"""
+        DELETE FROM {table_name}
+        WHERE ({key_list}) IN (
+            SELECT {key_list}
+            FROM (
+                SELECT {key_list},
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ticker ORDER BY {order_by}
+                       ) AS rn
+                FROM {table_name}
+                {ticker_filter}
+            )
+            WHERE rn > ?
+        )
+        """,
+        params,
+    )
+
+
 def sync_memory_to_disk(mem_conn: sqlite3.Connection | None = None) -> None:
-    """인메모리 DB의 상태를 물리 디스크 파일로 안전하게 백업합니다."""
+    """Flush the disk DB WAL, or back up an explicitly supplied test DB."""
     import logging
 
     logger = logging.getLogger(__name__)
@@ -234,7 +248,7 @@ def sync_memory_to_disk(mem_conn: sqlite3.Connection | None = None) -> None:
     # Fallback in case custom sched level is not initialized
     log_func = getattr(logger, "sched", logger.info)
 
-    log_func("[DB SYNC] Starting memory to disk synchronization...")
+    log_func("[DB SYNC] Starting durability synchronization...")
 
     # 물리적 DB 경로 확보 (테스트 환경 최우선 라우팅)
     test_db = test_db_var.get()
@@ -248,26 +262,21 @@ def sync_memory_to_disk(mem_conn: sqlite3.Connection | None = None) -> None:
             disk_path = Path(__file__).resolve().parents[2] / "data" / "trading.db"
 
     try:
-        global _keepalive_conn
-        source_conn = mem_conn if mem_conn is not None else _keepalive_conn
-        if source_conn is None:
-            logger.error(
-                "[DB SYNC] source_conn is None. In-memory DB might not be initialized."
-            )
-            return
-
         disk_path.parent.mkdir(parents=True, exist_ok=True)
         # WAL 모드 적용된 디스크 커넥션 열기
         disk_conn = sqlite3.connect(disk_path, check_same_thread=False)
         try:
             disk_conn.execute("PRAGMA journal_mode = WAL")
             disk_conn.execute("PRAGMA synchronous = NORMAL")
-            # 256 페이지(약 1MB)씩 복사하며, 복사 간 0.001초 쉬어서 DB Lock을 최소화
-            source_conn.backup(disk_conn, pages=256, sleep=0.001)
+            if mem_conn is None:
+                disk_conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            else:
+                # Preserve the explicit in-memory backup path used by integration tests.
+                mem_conn.backup(disk_conn, pages=256, sleep=0.001)
         finally:
             disk_conn.close()
 
-        log_func(f"[DB SYNC] Memory perfectly synced to disk: {disk_path.name}")
+        log_func(f"[DB SYNC] Disk durability synchronized: {disk_path.name}")
     except Exception as e:
         logger.error(f"[DB SYNC] Failed to sync to disk: {e}")
         raise

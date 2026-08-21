@@ -40,8 +40,11 @@ def rebuild_daily_ma_for_ticker(main_conn, ma_conn, ticker: str) -> None:
         )
 
     ma_conn.execute("DELETE FROM daily_ma WHERE ticker = ?", (ticker,))
+    from core.database import DAILY_MA_RETENTION
+
     ma_conn.executemany(
-        "INSERT INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ma_records
+        "INSERT INTO daily_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ma_records[-DAILY_MA_RETENTION:],
     )
     ma_conn.commit()
 

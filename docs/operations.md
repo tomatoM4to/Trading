@@ -33,7 +33,7 @@
 
 ### GC
 
-`POST /admin/action/gc`는 즉시 지능형 GC를 실행한다. 데이터 삭제와 디스크 동기화를 포함하므로 장중 호출을 피한다.
+`POST /admin/action/gc`는 즉시 지능형 GC를 실행한다. 데이터 삭제와 WAL 체크포인트를 포함하므로 장중 호출을 피한다.
 
 ### 통합 검증
 
@@ -96,7 +96,7 @@ uv run python -m unittest discover -s tests -v
 4. KIS 인증 오류와 토큰 캐시 확인
 5. `/admin/live`로 최신 적재 시각 확인
 6. 디스크의 `data/trading.db`와 volume mount 확인
-7. 재시작 전에 마지막 메모리→디스크 동기화 성공 로그 확인
+7. 재시작 전에 마지막 WAL 체크포인트 성공 로그 확인
 
 ## 알려진 운영 위험
 

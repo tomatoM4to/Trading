@@ -181,7 +181,12 @@ async def process_ticker(
             df_clean["close"] = df_clean["close"].astype(int)
             df_clean["volume"] = df_clean["volume"].astype(int)
 
-            from core.database import connect_ma_db, connect_sqlite
+            from core.database import (
+                MINUTE_MA_RETENTION,
+                connect_ma_db,
+                connect_sqlite,
+                prune_ma_history,
+            )
             from core.ma_calculator import ma_calculator
 
             # 연산 시계열 보장을 위해 시간순(ASC) 정렬
@@ -232,6 +237,9 @@ async def process_ticker(
                     )
                 """
                 ma_cursor.executemany(ma_insert_sql, ma_records)
+                prune_ma_history(
+                    ma_conn, "minute_ma", MINUTE_MA_RETENTION, ticker=ticker
+                )
                 ma_conn.commit()
             except Exception as e:
                 logger.error(f"[{ticker}] DB Insert Error: {e}")

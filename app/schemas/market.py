@@ -32,6 +32,7 @@ class ChartDataPoint(BaseModel):
     # 장기 이동평균선 (일봉 기준 매핑)
     ma_daily_1: float | None = None
     ma_daily_5: float | None = None
+    ma_daily_10: float | None = None
     ma_daily_20: float | None = None
     ma_daily_60: float | None = None
     ma_daily_120: float | None = None

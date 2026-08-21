@@ -186,3 +186,44 @@ class DailyMaIdempotencyTests(unittest.TestCase):
         finally:
             main_conn.close()
             ma_conn.close()
+
+    def test_rebuild_daily_ma_keeps_only_screener_horizon(self):
+        import sqlite3
+
+        from core.database import DAILY_MA_RETENTION
+        from tasks.daily_ohlcv_scheduler import rebuild_daily_ma_for_ticker
+
+        main_conn = sqlite3.connect(":memory:")
+        ma_conn = sqlite3.connect(":memory:")
+        try:
+            main_conn.execute(
+                "CREATE TABLE daily_ohlcv (ticker TEXT, date INTEGER, close INTEGER)"
+            )
+            main_conn.executemany(
+                "INSERT INTO daily_ohlcv VALUES (?, ?, ?)",
+                [("TEST", date, date) for date in range(1, 501)],
+            )
+            ma_conn.execute(
+                """
+                CREATE TABLE daily_ma (
+                    ticker TEXT, date INTEGER, ma5 REAL, ma10 REAL, ma20 REAL,
+                    ma60 REAL, ma120 REAL, ma200 REAL
+                )
+                """
+            )
+
+            rebuild_daily_ma_for_ticker(main_conn, ma_conn, "TEST")
+
+            count, min_date, max_date = ma_conn.execute(
+                "SELECT COUNT(*), MIN(date), MAX(date) FROM daily_ma"
+            ).fetchone()
+            self.assertEqual(count, DAILY_MA_RETENTION)
+            self.assertEqual(min_date, 200)
+            self.assertEqual(max_date, 500)
+            ma200 = ma_conn.execute(
+                "SELECT ma200 FROM daily_ma WHERE date = 200"
+            ).fetchone()[0]
+            self.assertEqual(ma200, 100.5)
+        finally:
+            main_conn.close()
+            ma_conn.close()
