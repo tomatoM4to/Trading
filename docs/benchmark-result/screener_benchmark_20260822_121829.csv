@@ -1,0 +1,13 @@
+Scenario Name,Duration (s),Tickers Found,Status
+"Light 1 (Daily Alignment, 5 Sessions)",5.407,323,Success
+"Light 2 (Daily Golden Cross, 20 Sessions)",6.024,2041,Success
+"Light 3 (Minute Golden Cross, 60 Minutes)",9.694,2301,Success
+"Light 4 (Daily Convergence, 10 Sessions)",5.358,69,Success
+Light 5 (Daily MA20 Disparity Above 105),6.711,480,Success
+Light 6 (Daily 1M Volume Peak Breakout),9.774,629,Success
+Light 7 (Three-Way Daily Opportunity OR),21.52,2158,Success
+Heavy 1 (Daily 300-Candle Alignment Scan),8.971,0,Success
+Heavy 2 (Minute 390-Candle Alignment Scan),12.815,0,Success
+Heavy 3 (Minute 390-Candle Convergence Scan),14.531,1607,Success
+Heavy 4 (Three-Way Full-Scan OR),43.074,2285,Success
+Heavy 5 (Two-Way Multi-Timeframe OR),29.269,2256,Success

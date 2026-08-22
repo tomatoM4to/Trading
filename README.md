@@ -7,7 +7,7 @@ Oracle Cloud Free Tier(1 OCPU / 1GB RAM)의 자원 제약을 극복하기 위해
 
 ## 🚀 배포 가이드 (Deployment Guide)
 
-본 프로젝트는 GitHub Actions를 활용하여 **완전 자동화된 CI/CD 파이프라인**이 구축되어 있습니다. 
+본 프로젝트는 GitHub Actions를 활용하여 **완전 자동화된 CI/CD 파이프라인**이 구축되어 있습니다.
 로컬 코드를 수동으로 서버에 전송할 필요 없이, 아래 순서에 따라 GitHub 설정만 완료하면 인프라 세팅부터 SSL 발급, 서비스 구동까지 자동으로 진행됩니다.
 
 ### Step 1. GitHub Secrets 환경변수 세팅 (가장 중요)
@@ -22,8 +22,8 @@ Oracle Cloud Free Tier(1 OCPU / 1GB RAM)의 자원 제약을 극복하기 위해
 | `CR_PAT` | 도커 이미지 푸시용 GitHub Personal Access Token | `ghp_xxxxxxxx...` |
 | `DOMAIN` | 서버에 연결된 도메인 이름 (Nginx용) | `api.yourdomain.com` |
 | **[KIS API 정보]** |
-| `KIS_MY_APP` | KIS OpenAPI 실전투자 App Key | `PSuZZZOS...` |
-| `KIS_MY_SEC` | KIS OpenAPI 실전투자 App Secret | `jkSniXR...` |
+| `KIS_MY_APP` | KIS OpenAPI 실전투자 App Key | `dsgfhh...` |
+| `KIS_MY_SEC` | KIS OpenAPI 실전투자 App Secret | `jksdgR...` |
 | `KIS_MY_HTSID` | 한국투자증권 HTS 접속 ID | `toM4to` |
 | `KIS_MY_ACCT_STOCK` | 주식 계좌번호 앞 8자리 | `12345678` |
 | `KIS_MY_PROD` | 계좌 상품코드 뒤 2자리 (종합계좌는 `01`) | `01` |
