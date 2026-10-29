@@ -1,5 +1,12 @@
 # KIS OpenAPI 통합
 
+## Current Decision
+
+실전투자 설정을 사용한다. 일반 데이터 요청은 전역 큐, 인증은 별도 토큰 경로로 관리하며 호출 간격과 타임아웃을 유지한다.
+
+- 구현 근거: [kis_auth.py](../app/core/kis_auth.py), [kis_fetch.py](../app/core/kis_fetch.py)
+- 함께 읽기: [환경 설정](environment.md), [수집](scheduler.md), [운영](operations.md)
+
 ## 범위
 
 KIS 통합은 `app/core/kis_auth.py`의 인증과 `app/core/kis_fetch.py`의 데이터 요청으로 나뉜다. 애플리케이션 코드가 KIS에 요청할 때는 `_do_fetch()`를 직접 호출하지 않고 `async_kis_fetch()`를 사용한다.

@@ -1,131 +1,46 @@
-# Trading Server & Dashboard 에이전트 규칙
+# Agent Instructions
 
-## 1. 역할과 응답 규칙
+## Scope
 
-- 항상 한국어로 친절하고 명확하게 답한다.
-- 현재 동작의 최종 근거는 테스트 가능한 코드다. 문서보다 코드를, 추측보다 확인을 우선한다.
-- 작업 전에 이 파일과 작업 도메인에 해당하는 `/docs` 문서를 읽고, 수정할 소스와 관련 타입·테스트·유사 구현을 확인한다.
-- 문서와 코드가 충돌하면 임의로 선택하지 말고 충돌을 밝힌다. 버그 수정 요청이 아니라면 코드를 문서에 맞추지 않는다.
-- 별도 ADR 문서를 만들지 않는다. 설계 결정의 배경·대안·트레이드오프는 해당 주제의 `/docs` 문서에 함께 기록한다.
-- 사용자가 요구하지 않은 리팩터링, 기능 추가, 의존성 변경, 스키마 변경은 하지 않는다.
-- 기존 변경은 사용자의 작업으로 간주하고 보존한다.
+KIS OpenAPI로 국내 주식 데이터를 수집하고 로컬 SQLite 기반 스크리너와 차트를 제공한다. 1 OCPU·1GB RAM 환경에서 **데이터 무결성·계좌 안전 → 메모리 생존성 → 호출 제한 → 조회 지연 → 단순성** 순서로 판단한다.
 
-## 2. 프로젝트 목적
+- 한국어로 답한다. 현재 동작의 최종 근거는 테스트 가능한 코드다.
+- 작업 전에 이 파일, 관련 문서, 수정할 소스·타입·테스트를 읽는다. 필요한 문서만 읽고 전체 문서를 컨텍스트에 넣지 않는다.
+- 기존 사용자 변경을 보존한다. 요청하지 않은 리팩터링·기능·의존성·스키마 변경은 하지 않는다.
+- `open-trading-api/`는 외부 참고 서브모듈이다. 명시적 요청 없이 수정하지 않는다.
 
-KIS OpenAPI로 국내 약 2,400개 종목의 일봉·분봉을 수집하고, 로컬 SQLite 데이터만으로 돌파 전략 스크리닝과 차트 조회를 제공한다. 운영 대상은 실전투자(PROD)이며 Oracle Cloud Free Tier의 1 OCPU·1GB RAM 제약을 전제로 한다.
+## Code as Documentation
 
-핵심 목표는 다음 순서로 판단한다.
+- 함수·컬럼·상수 목록은 소스에서 확인한다. Markdown에는 책임 경계, 설계 이유, 운영 절차, 검증 근거를 남긴다.
+- 코드와 문서가 다르면 충돌을 밝힌다. 버그 수정 요청이 아니라면 코드를 문서에 맞추지 않는다.
+- 설계 결정과 대안은 해당 주제 문서에 기록한다. 별도 ADR을 자동 생성하지 않는다.
+- 측정값에는 실행 조건과 원본 경로를 붙인다. 과거 측정, 현재 코드, 재검증 필요를 구분하고 원본 CSV를 요약 수치로 대체하지 않는다.
 
-1. 데이터 무결성과 운영 계좌의 안전
-2. 1GB 메모리 한도 내 생존성
-3. KIS 호출 제한 준수
-4. 장중 조회 지연 최소화
-5. 구현과 운영의 단순성
+## Safety Boundaries
 
-## 3. 설계 철학
+- 실전투자(PROD) 단일 운영 모드를 유지한다. 모의투자 분기를 임의로 추가하지 않는다.
+- 일반 KIS 데이터 요청은 전역 큐를 통과한다. 큐의 `asyncio.sleep(0.1)`, 일반 HTTP 10초·인증 30초 타임아웃을 줄이거나 제거하지 않는다.
+- 합의 없이 핵심 테이블, 시스템 가드, 전역 큐, MA 메모리 DB와 keep-alive 연결을 삭제하거나 축소하지 않는다.
+- 전 종목 OHLCV를 하나의 Pandas DataFrame으로 적재·병합하지 않는다. SQL 후보 축소와 사전 계산 MA를 우선한다.
+- 동적 SQL 값은 바인딩한다. 식별자는 정적 화이트리스트, MA는 `VALID_MA_PERIODS` 검증을 통과시킨다. 기간·임계값·방향·limit의 타입과 범위를 검증한다.
+- 운영 데이터에 영향을 주는 통합 검증은 `test_db_var`로 격리한다. SQLite 연결은 context manager만으로 닫힌다고 가정하지 않고 명시적으로 종료한다.
+- 데이터 변경 작업의 가드·WAL 체크포인트·날짜/시간 INTEGER 계약을 지킨다. 상세 경계는 [데이터베이스](docs/database.md), [수집](docs/scheduler.md), [KIS](docs/kis-integration.md)에 있다.
+- `.env`, `kis_devlp.yaml`, 토큰 캐시, DB 파일을 커밋하지 않는다. 브라우저에 KIS 자격 증명·관리자 키를 전달하지 않는다.
+- 관리자 API와 KIS 연동 검증은 부수 효과가 있다. 자동 회귀 테스트와 구분하고 운영 서버에서 임의 실행하지 않는다.
 
-### 로컬 데이터 우선
+## Context Routing
 
-- 사용자 조회 경로는 가능한 한 KIS API를 직접 호출하지 않고 이미 수집한 SQLite 데이터를 사용한다.
-- 장중 외부 API 장애가 조회 API 전체 장애로 번지지 않게 한다.
-- KIS 실시간 호출이 필요한 기능은 반드시 전역 우선순위 큐를 통과한다.
-
-### 디스크는 정본으로, 메모리는 작게
-
-- 종목 마스터와 OHLCV는 WAL이 적용된 `data/trading.db`를 정본으로 직접 서비스한다.
-- `trading.db`는 KIS 원본에서 재구축 가능한 로컬 정본이다. 프로세스를 정상 종료한 뒤 삭제해 콜드 스타트를 수행할 수 있지만, API 장애와 복구 시간을 줄이기 위한 배포 전 백업은 권장 사항으로 취급한다.
-- 이동평균만 별도 Shared In-Memory DB의 `daily_ma`, `minute_ma`에 유지한다.
-- MA 메모리 DB 수명을 유지하는 keep-alive 연결을 임의로 제거하지 않는다.
-- 일봉 MA는 종목당 최신 301개, 분봉 MA는 최신 391개까지만 메모리에 유지한다.
-- 분봉 수집 페이지 순서를 계산 순서로 사용하지 않는다. 종목 수집 완료 후 디스크 정본의 최신 590개를 시간순으로 읽어 최신 391개의 MA를 재구축한다.
-- 무거운 쓰기 작업 뒤에는 정해진 WAL 체크포인트 경로를 사용한다.
-
-### 전 종목 연산은 작게
-
-- 2,400개 전 종목 시계열을 하나의 Pandas DataFrame으로 적재하거나 병합하지 않는다.
-- 스크리너 중간 결과는 `dict[str, dict[str, float]]`와 파이썬 내장 집합·딕셔너리 연산을 사용한다.
-- SQL에서 후보군을 먼저 줄이고 필요한 데이터만 반환한다.
-- 단일 종목 차트용 윈도 함수와 전 종목 스크리너 쿼리를 같은 비용으로 간주하지 않는다. 전 종목 경로에는 사전 계산 MA를 우선한다.
-
-### 실패는 빠르고 복구 가능하게
-
-- 부트스트랩, GC, 마스터 동기화처럼 데이터 상태를 바꾸는 작업은 `system_state.acquire()`로 일반 API를 503 차단한다.
-- `/health`만 시스템 가드를 우회한다.
-- 외부 HTTP 요청은 일반 호출 `timeout=10`, 인증 호출 `timeout=30`을 명시한다.
-- 백그라운드 SQLite 연결은 `try/finally`에서 반드시 닫는다.
-- 날짜와 시간은 STRICT 스키마에 맞춰 항상 `INTEGER`로 저장한다.
-
-### 입력은 신뢰하지 않는다
-
-- 동적 SQL의 값은 바인딩 파라미터를 사용한다.
-- 컬럼명처럼 바인딩할 수 없는 식별자는 정적 화이트리스트로만 선택한다.
-- 이동평균 기간은 `5, 10, 20, 60, 120, 200`만 허용한다.
-- 스크리너의 기간, 임계값, 방향, limit은 타입과 범위를 검증한 뒤 쿼리에 사용한다.
-- 관리자·테스트 엔드포인트는 운영상 민감한 인터페이스로 취급한다.
-
-### 단일 운영 모드
-
-- 모의투자 지원을 새로 추가하거나 실전/모의 분기를 확장하지 않는다.
-- 인증 설정은 실전 키와 실전 API URL을 기준으로 유지한다.
-
-## 4. 불변 경계
-
-- KIS 큐의 `asyncio.sleep(0.1)`을 줄이거나 제거하지 않는다.
-- 인증을 제외한 모든 외부 HTTP 호출의 10초 타임아웃을 제거하지 않는다.
-- KIS 투자자 랭킹 API의 최대 30건 반환 제약을 우회한다고 가정하지 않는다.
-- `VALID_MA_PERIODS` 검증 없이 요청 문자열을 SQL 식별자로 보간하지 않는다.
-- 운영 데이터에 영향을 주는 통합 검증은 `test_db_var`로 테스트 DB에 라우팅한다.
-- SQLite context manager가 연결을 닫는다고 가정하지 않는다. 연결은 명시적으로 닫는다.
-- 합의 없이 핵심 테이블, 시스템 가드, 전역 KIS 큐, 메모리 DB 구조를 삭제하거나 축소하지 않는다.
-- `.env`, `kis_devlp.yaml`, 토큰 캐시, DB 파일을 커밋하지 않는다.
-
-## 5. 컨텍스트 라우팅
-
-작업에 필요한 문서만 선택해서 읽는다.
-
-| 작업 영역 | 먼저 읽을 문서 |
+| 작업 | 먼저 읽을 문서 |
 |---|---|
-| 전체 구조·모듈 경계 | `docs/architecture.md` |
-| SQLite·스키마·수명주기 | `docs/database.md` |
-| KIS 인증·호출 큐 | `docs/kis-integration.md` |
-| 스케줄러·수집·GC | `docs/scheduler.md` |
-| 스크리너 AST·SSE | `docs/screener.md` |
-| FastAPI 라우트·계약 | `docs/api.md` |
-| Next.js·차트·UI | `docs/frontend.md` 및 `web/AGENTS.md` |
-| 환경 변수·로컬 실행 | `docs/environment.md` |
-| Docker·GitHub Actions·Nginx | `docs/deployment.md` |
-| 검증·운영 점검 | `docs/operations.md` |
+| 구조와 책임 경계 | [architecture](docs/architecture.md) |
+| 데이터·메모리 / 수집·GC | [database](docs/database.md), [scheduler](docs/scheduler.md) |
+| KIS / HTTP·SSE·스크리너 | [kis-integration](docs/kis-integration.md), [api](docs/api.md), [screener](docs/screener.md) |
+| 프론트엔드 | [frontend](docs/frontend.md), [web/AGENTS](web/AGENTS.md) |
+| 로컬 설정 / 배포·운영 | [environment](docs/environment.md), [deployment](docs/deployment.md), [operations](docs/operations.md) |
+| 성능·검증 기록 | [benchmark](docs/benchmark.md) |
 
-`open-trading-api/`는 KIS 공식 예제 서브모듈이다. 프로젝트 소유 코드가 아니므로 참고 자료로만 사용하고, 명시적 요청 없이 수정하지 않는다.
+## Completion
 
-## 6. 기술 스택과 명령어
+검증 명령과 운영 검증의 경계는 [operations](docs/operations.md)를 따른다. 코드 변경은 Ruff·백엔드 회귀 테스트·TypeScript·ESLint·프론트엔드 빌드와 영향 경로의 수동 검증을 확인한다. 문서 변경은 소스 대조, 상대 링크, 명령·측정 출처를 확인한다.
 
-- 백엔드: Python 3.12+, FastAPI, APScheduler, SQLite, requests, uv
-- 프론트엔드: Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui, Lightweight Charts 5
-- 인프라: Docker Compose, Nginx, Certbot, GitHub Actions, GHCR
-
-```powershell
-# 백엔드 개발 서버
-uv run fastapi dev app/main.py
-
-# 백엔드 정적 검사와 포맷
-uv run ruff check .
-uv run ruff format --check .
-
-# 프론트엔드
-cd web
-npm run dev
-npm run lint
-npx tsc --noEmit
-npm run build
-```
-
-백엔드 회귀 테스트는 `uv run python -m unittest discover -s tests -v`로 실행한다. Ruff, 회귀 테스트, TypeScript, ESLint, 프로덕션 빌드와 영향 경로의 수동 검증을 최소 완료 조건으로 삼는다.
-
-## 7. 작업 완료 기준
-
-- 관련 문서와 구현이 서로 일치한다.
-- 입력 검증, 연결 종료, 타임아웃, 메모리 한도를 다시 확인한다.
-- 가능한 정적 검사와 빌드를 통과한다.
-- 실패하거나 실행하지 못한 검증을 숨기지 않는다.
-- 변경 파일, 검증 결과, 남은 위험을 사용자에게 명확히 전달한다.
+완료 보고에는 변경 파일, 실행한 검사와 결과, 실행하지 못한 검사 및 남은 위험을 구분한다. 일부 검사 통과를 전체 검증 완료로 쓰지 않는다.

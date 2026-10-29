@@ -1,5 +1,12 @@
 # 스크리너 엔진
 
+## Current Decision
+
+AND 체인 내부에서만 필터 실행 순서를 바꾸고 후보 집합을 줄인다. 의미론과 입력 검증을 보존한 상태에서 성능을 비교한다.
+
+- 구현 근거: [screener_service.py](../app/services/screener_service.py), [요청 모델](../app/schemas/screener.py), [회귀 테스트](../tests/test_screener_logic.py)
+- 함께 읽기: [API](api.md), [벤치마크](benchmark.md), [프론트엔드](frontend.md)
+
 ## 요청 모델
 
 `POST /api/screener/run`은 다음 형태의 AST를 받는다.

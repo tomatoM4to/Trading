@@ -1,5 +1,12 @@
 # 프론트엔드 대시보드
 
+## Current Decision
+
+백엔드는 원시 캔들과 SSE 결과를 제공하고, 브라우저는 단일 종목 차트 집계와 필터 상태 표시를 담당한다.
+
+- 구현 근거: [app](../web/app/), [components](../web/components/), [chart-utils.ts](../web/lib/chart-utils.ts), [package.json](../web/package.json)
+- 함께 읽기: [실행](../web/README.md), [작업 규칙](../web/AGENTS.md), [API](api.md)
+
 ## 기술 구성
 
 - Next.js 16 App Router
@@ -66,11 +73,13 @@
 
 ## 검증
 
-```powershell
-cd web
-npm run lint
-npx tsc --noEmit
-npm run build
-```
+정적 검사·타입 검사·빌드 명령은 [프론트엔드 README](../web/README.md#verify)에 있다.
 
-차트나 인터랙션 변경은 실제 브라우저에서 콘솔 오류, 네트워크 요청, 작은 화면과 큰 화면을 함께 확인한다.
+차트나 인터랙션 변경은 실제 브라우저에서 다음을 확인한다.
+
+- 콘솔 오류, API 요청과 SSE 종료·오류 처리
+- 작은 화면과 큰 화면의 필터·차트 조작
+- 반복 실행, 빈 결과, 로딩 중 취소와 화면 이탈
+- 시간 프레임 변경 후 캔들·MA 시점 정합성
+
+실행하지 않은 브라우저 검증은 완료로 기록하지 않는다.

@@ -1,62 +1,70 @@
-# Trading Server
+# Trading Server & Dashboard
 
-KIS OpenAPI를 활용한 Zero-Latency Breakout(돌파) 전략 기반의 자동 매매 백엔드 시스템입니다.
-Oracle Cloud Free Tier(1 OCPU / 1GB RAM)의 자원 제약을 극복하기 위해 SQLite WAL 모드와 고도의 백그라운드 스케줄러 최적화 기법을 적용했습니다.
+KIS OpenAPI로 국내 주식의 일봉·분봉을 수집하고, 로컬 SQLite 데이터로 돌파 전략 스크리닝과 차트를 제공한다. FastAPI 백엔드와 Next.js 대시보드로 구성되며, 운영 목표 환경은 Oracle Cloud Free Tier의 1 OCPU·1GB RAM이다.
 
----
+## Current State
 
-## 🚀 배포 가이드 (Deployment Guide)
+- 종목 마스터·OHLCV는 디스크 SQLite(WAL), 반복 조회용 이동평균은 별도 Shared In-Memory DB에 둔다.
+- 스크리너는 후보 종목을 단계적으로 줄이고 SSE로 진행 상황과 결과를 전달한다.
+- 프론트엔드는 차트와 필터 조합 UI를 제공한다. 이 저장소의 현재 HTTP 경로는 데이터 수집·조회·스크리닝 중심이다.
+- 성능 개선 과정과 원본 측정 자료는 [벤치마크](docs/benchmark.md)에서 읽는다. 과거 측정값은 현재 운영 성능 보장이 아니다.
 
-본 프로젝트는 GitHub Actions를 활용하여 **완전 자동화된 CI/CD 파이프라인**이 구축되어 있습니다. 
-로컬 코드를 수동으로 서버에 전송할 필요 없이, 아래 순서에 따라 GitHub 설정만 완료하면 인프라 세팅부터 SSL 발급, 서비스 구동까지 자동으로 진행됩니다.
+## Quick Start
 
-### Step 1. GitHub Secrets 환경변수 세팅 (가장 중요)
-배포를 시작하기 전, GitHub 레포지토리의 **[Settings] -> [Secrets and variables] -> [Actions]** 로 이동하여 `Repository secrets`에 아래 변수들을 반드시 등록해주세요.
+Python 3.12 이상, uv, Node.js와 npm이 필요하다. 저장소 루트에서 실행한다.
 
-| Secret Name | 설명 | 예시 |
-|---|---|---|
-| **[서버 및 인프라]** |
-| `OCI_HOST` | 배포할 오라클 클라우드(OCI) 서버의 공인 IP 주소 | `123.45.67.89` |
-| `OCI_USERNAME` | 서버 접속용 SSH 사용자 계정명 | `ubuntu` (또는 `opc`) |
-| `OCI_SSH_KEY` | 서버 접속에 사용할 SSH Private Key | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
-| `CR_PAT` | 도커 이미지 푸시용 GitHub Personal Access Token | `ghp_xxxxxxxx...` |
-| `DOMAIN` | 서버에 연결된 도메인 이름 (Nginx용) | `api.yourdomain.com` |
-| **[KIS API 정보]** |
-| `KIS_MY_APP` | KIS OpenAPI 실전투자 App Key | `PSuZZZOS...` |
-| `KIS_MY_SEC` | KIS OpenAPI 실전투자 App Secret | `jkSniXR...` |
-| `KIS_MY_HTSID` | 한국투자증권 HTS 접속 ID | `toM4to` |
-| `KIS_MY_ACCT_STOCK` | 주식 계좌번호 앞 8자리 | `12345678` |
-| `KIS_MY_PROD` | 계좌 상품코드 뒤 2자리 (종합계좌는 `01`) | `01` |
+```powershell
+git clone https://github.com/tomatoM4to/Trading.git
+cd Trading
+uv sync --locked
+```
 
-*(참고: 이 시크릿들은 깃허브 액션이 실행될 때 동적으로 서버에 `kis_devlp.yaml` 과 `.env` 파일을 안전하게 생성하는 데 사용되며, 절대로 코드에 하드코딩되어 노출되지 않습니다.)*
+[환경 설정](docs/environment.md)에 따라 `.env`와 `kis_devlp.yaml`을 로컬에 준비한다. 개발 시 `DEBUG=True`, `SCHED=False`로 시작한다. **이 설정도 오프라인 모드는 아니다.** 앱 시작 시 KIS 인증을 수행하며, 기존 OHLCV로 MA DB를 재구축한다. 빈 DB의 전체 수집은 별도 부트스트랩이 필요하다.
 
----
+```powershell
+uv run fastapi dev app/main.py
+```
 
-### Step 2. 서버 초기 인프라 세팅 (최초 1회 수동 실행)
-도커 마운트를 위한 디렉토리를 생성하고, `.env` 환경변수 파일을 세팅한 뒤 HTTPS(SSL) 인증서를 최초 발급받는 작업입니다.
+다른 터미널에서 프론트엔드를 시작한다.
 
-1. 깃허브 레포지토리 상단의 **[Actions]** 탭 클릭
-2. 좌측 메뉴에서 **`🛠️ Setup Server & SSL`** 워크플로우 선택
-3. 우측의 **[Run workflow]** 버튼 클릭
-4. 인증서 발급에 사용할 `Domain Name`과 `Email`을 입력하고 실행!
-   - ➔ 서버의 `~/Trading` 폴더에 `.env`와 인프라 파일들이 자동 배치되고 인증서 발급이 완료됩니다.
+```powershell
+cd web
+npm ci
+$env:NEXT_PUBLIC_API_URL = "http://localhost:8000"
+npm run dev
+```
 
----
+- 대시보드: http://localhost:3000
+- 백엔드 상태: http://localhost:8000/health
+- API 스키마: http://localhost:8000/docs
 
-### Step 3. 메인 배포 (자동 실행)
-초기 세팅(Step 2)이 끝났다면, 이제부터는 코드 개발에만 집중하시면 됩니다.
+`/health`는 프로세스 응답만 확인한다. 데이터 적재·MA 준비 여부는 [운영 점검](docs/operations.md)을 따른다. 관리자 API는 별도 `ADMIN_API_KEY` 설정과 `X-Admin-Key` 헤더가 필요하다.
 
-1. 로컬에서 코드를 수정하고 **`main` 브랜치에 Push** (또는 Pull Request Merge) 합니다.
-2. 자동으로 메인 배포 워크플로우(`deploy.yml`)가 돌아갑니다.
-3. 소스코드가 도커 이미지로 빌드되어 GHCR에 안전하게 보관되며, OCI 서버는 가장 최신 이미지를 다운받아 서버를 무중단(또는 짧은 다운타임) 재시작합니다.
-4. **HTTPS(443)** 환경에서 동작하는 Zero-Latency API 서버가 켜집니다! 🎉
+## Verification
 
----
+```powershell
+uv run ruff check .
+uv run ruff format --check .
+uv run python -m unittest discover -s tests -v
 
-## 📚 관련 기술 문서
+cd web
+npm run lint
+npx tsc --noEmit
+npm run build
+```
 
-- 문서 전체 지도: [`docs/README.md`](./docs/README.md)
-- 시스템 아키텍처: [`docs/architecture.md`](./docs/architecture.md)
-- 배포 및 Docker 구조: [`docs/deployment.md`](./docs/deployment.md)
-- 백그라운드 스케줄러: [`docs/scheduler.md`](./docs/scheduler.md)
-- DB와 메모리 모델: [`docs/database.md`](./docs/database.md)
+회귀 테스트, 실제 KIS 호출이 필요한 통합 검증, 성능 측정은 서로 다른 절차다. 실행 조건과 결과 기록 방법은 [운영과 검증](docs/operations.md), 성능 측정은 [벤치마크](docs/benchmark.md)를 따른다.
+
+## Documentation
+
+| 목적 | 문서 |
+|---|---|
+| 작업 규칙 | [AGENTS.md](AGENTS.md) |
+| 전체 문서 지도 | [docs/README.md](docs/README.md) |
+| 구조와 설계 판단 | [architecture](docs/architecture.md) |
+| 성능 개선 과정·측정 근거 | [benchmark](docs/benchmark.md) |
+| 설정 / 배포 / 운영 | [environment](docs/environment.md), [deployment](docs/deployment.md), [operations](docs/operations.md) |
+
+## Deployment
+
+배포 절차와 필요한 GitHub Secrets는 [배포 문서](docs/deployment.md)에 모았다. `main` push는 운영 배포 워크플로를 실행한다. 현재 Compose 배포에는 서비스 중단 구간이 있고 자동 롤백·배포 전 테스트 게이트가 없으므로 문서 PR도 병합 전에 배포 영향을 확인한다.

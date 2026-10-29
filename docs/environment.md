@@ -1,5 +1,12 @@
 # 환경 설정과 로컬 실행
 
+## Current Decision
+
+개발 설정은 예약 수집을 끌 수 있지만 KIS 인증까지 끄지는 않는다. 실제 자격 증명·계좌·토큰은 저장소와 브라우저에 남기지 않는다.
+
+- 구현 근거: [main.py](../app/main.py), [kis_auth.py](../app/core/kis_auth.py), [database.py](../app/core/database.py), [dependencies.py](../app/core/dependencies.py)
+- 함께 읽기: [빠른 실행](../README.md), [배포](deployment.md), [운영](operations.md)
+
 ## 요구 사항
 
 - Python 3.12 이상
@@ -58,25 +65,13 @@ my_agent: "사용자 에이전트"
 
 Pydantic 모델에는 일부 모의·선물 계좌 필드가 남아 있지만 현재 인증과 운영 경로는 실전 REST URL과 실전 자격 증명을 사용한다.
 
-## 백엔드 실행
+## 실행 경계
 
-```powershell
-uv sync
-uv run fastapi dev app/main.py
-```
+명령은 [루트 README](../README.md#quick-start)와 [프론트엔드 README](../web/README.md#run)를 따른다.
 
-로컬에서도 시작 과정에서 KIS 인증을 수행한다. 유효한 설정과 토큰 캐시가 없으면 앱이 기동하지 않을 수 있다.
+로컬에서도 시작 과정에서 KIS 인증을 수행한다. 유효한 설정과 토큰 캐시가 없으면 앱이 기동하지 않을 수 있다. `SCHED=False`는 예약 작업과 전체 수집 부트스트랩을 끄지만 기존 OHLCV로 MA를 재구축한다. 빈 DB를 자동으로 채우는 설정으로 오해하지 않는다.
 
-## 프론트엔드 실행
-
-```powershell
-cd web
-npm ci
-$env:NEXT_PUBLIC_API_URL = "http://localhost:8000"
-npm run dev
-```
-
-백엔드 CORS에는 localhost:3000과 현재 Vercel origin이 등록돼 있다. 다른 origin을 사용할 때는 CORS 정책을 명시적으로 갱신한다.
+백엔드 CORS에는 localhost:3000과 현재 Vercel origin이 등록돼 있다. 다른 origin은 [main.py](../app/main.py)의 정책을 함께 확인한다.
 
 ## 비밀정보
 
