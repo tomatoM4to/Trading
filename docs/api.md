@@ -1,84 +1,39 @@
 # FastAPI 인터페이스
 
-## 공통 동작
+## Current Decision
 
-FastAPI 앱은 모든 경로에 `system_state_guard`를 전역 dependency로 적용한다. 시스템이 무거운 데이터 작업 중이면 `/health`를 제외한 요청에 HTTP 503과 현재 작업 이유를 반환한다.
+HTTP 경계는 입력 검증·인증·시스템 가드를 담당하고, 조회·수집 로직은 서비스에 둔다. 개별 필드의 최신 타입·기본값은 [routes](../app/routes/)와 [schemas](../app/schemas/)가 기준이다. 실행 중인 앱의 `/docs`도 같은 코드에서 생성된다.
 
-CORS 허용 origin은 현재 다음 세 곳이다.
+## Route Map
 
-- `http://localhost:3000`
-- `http://127.0.0.1:3000`
-- `https://trading-one-kappa.vercel.app`
-
-## 기본 경로
-
-| Method | Path | 설명 |
+| 경로 | 책임·주의사항 | 구현 |
 |---|---|---|
-| GET | `/` | 간단한 루트 응답 |
-| GET | `/health` | 상태, 현재 시각, 앱 이름. 시스템 가드 우회 |
+| `GET /`, `GET /health` | 루트 응답·프로세스 상태. `/health`만 시스템 가드 우회 | [main](../app/main.py) |
+| `GET /market/samsung/ohlcv` | KIS 직접 조회 진단. 일반 로컬 조회의 예외이며 전역 큐 사용 | [market](../app/routes/market.py) |
+| `GET /market/screener/top-volume` | 최신 거래일 거래량 상위 종목 조회 | [market](../app/routes/market.py) |
+| `GET /market/chart/{ticker}` | 로컬 OHLCV·MA 차트 조회 | [market](../app/routes/market.py), [service](../app/services/market_service.py) |
+| `POST /api/screener/run` | AST를 실행하고 SSE 전송 | [screener](../app/routes/screener.py), [이벤트 계약](screener.md#sse-계약) |
+| `GET /admin/live/global-status`, `/admin/live/ticker-status/{ticker}` | 디스크 OHLCV의 적재 날짜·행 수 확인 | [admin](../app/routes/admin.py), [live service](../app/services/admin_live_service.py) |
+| `GET /admin/test/daily_scheduler`, `/admin/test/minute_scheduler` | 테스트 DB를 만드는 실제 KIS 통합 검증. GET에도 부수 효과 존재 | [admin](../app/routes/admin.py), [test service](../app/services/admin_test_service.py) |
+| `POST /admin/action/gc` | 데이터 삭제와 WAL 체크포인트를 포함하는 운영 작업 | [admin](../app/routes/admin.py), [scheduler](../app/core/scheduler.py) |
 
-## 시장 API
+## Safety Boundaries
 
-### `GET /market/samsung/ohlcv`
+- 전역 `system_state_guard`는 데이터 변경 작업 중 `/health` 외 요청을 503으로 차단한다. `/health`의 성공은 데이터 준비 완료를 뜻하지 않는다.
+- 모든 `/admin/*`는 `X-Admin-Key`를 요구한다. 서버 `ADMIN_API_KEY`가 없으면 503, 요청 키가 없거나 다르면 401이다. 비교는 상수 시간 방식이다.
+- CORS 허용 origin은 [main.py](../app/main.py)에서 관리한다. CORS를 관리자 인증으로 취급하지 않는다.
+- `/docs`와 `/redoc`은 Nginx를 통해 노출된다. 네트워크 제한 등 운영 정책은 [배포](deployment.md)와 [운영](operations.md)을 따른다.
+- 관리자 통합 검증과 GC는 단순 읽기가 아니다. 자동 테스트 명령에 섞지 않는다.
 
-KIS API에서 삼성전자 최근 약 100일 일봉을 직접 조회하는 진단용 경로다. 일반 로컬 데이터 조회 원칙의 예외이며 전역 KIS 큐를 사용한다.
+## Error Contract
 
-### `GET /market/screener/top-volume`
+| 상황 | 응답 |
+|---|---|
+| Pydantic 요청 오류 | HTTP 422 |
+| 명시적 쿼리 검증 오류 | HTTP 400 |
+| 시스템 가드·관리자 키 미설정 | HTTP 503 |
+| 관리자 인증 실패 | HTTP 401 |
+| SSE 실행 중 오류 | HTTP 200 스트림 안의 `error` 이벤트 가능 |
+| KIS 오류 | 호출 경로에 따라 HTTP 400 또는 빈 필터 결과 |
 
-최신 거래일의 거래량 상위 30개 종목을 반환한다.
-
-```json
-{
-  "date": "20260821",
-  "items": [{"ticker": "005930", "name": "삼성전자", "volume": 123456}]
-}
-```
-
-### `GET /market/chart/{ticker}`
-
-쿼리 파라미터:
-
-- `days`: 1~500, 기본 3
-- `type`: `minute` 또는 `daily`, 기본 `minute`
-
-응답은 ticker, 이름과 OHLCV·MA 배열이다. 분봉 응답은 분봉 MA와 해당 시점의 일봉 MA를 함께 제공하고, 일봉 응답은 일봉 MA 필드를 제공한다.
-
-## 스크리너 API
-
-### `POST /api/screener/run`
-
-`ScreenerRequest`를 받아 SSE로 진행 상황과 결과를 전송한다. 상세 필터와 이벤트 계약은 `docs/screener.md`를 따른다.
-
-## 관리자 API
-
-### 통합 검증
-
-- `GET /admin/test/daily_scheduler`
-- `GET /admin/test/minute_scheduler`
-
-ContextVar를 이용해 테스트 DB에 라우팅한 뒤 표본 종목의 수집·복구·무결성을 검증한다. GET 요청이지만 외부 KIS 호출과 파일 생성 등 부수 효과가 있다.
-
-### 라이브 상태
-
-- `GET /admin/live/global-status?data_type=daily|minute`
-- `GET /admin/live/ticker-status/{ticker}?data_type=daily|minute`
-
-운영 메모리 DB의 적재 현황을 읽는다.
-
-### 운영 작업
-
-- `POST /admin/action/gc`
-
-지능형 GC를 즉시 실행한다. 실행 중 일반 API가 503으로 차단되며 완료 후 디스크 동기화가 수행된다.
-
-## 보안 경계
-
-모든 `/admin/*` 경로는 `X-Admin-Key` 헤더를 요구하며 서버의 `ADMIN_API_KEY`와 상수 시간 비교한다. 키가 없거나 다르면 401, 서버 키가 설정되지 않았으면 fail-closed로 503을 반환한다. Nginx는 `/docs`와 `/redoc`을 계속 프록시하므로 API 문서 노출은 별도 네트워크 정책이 필요하다.
-
-## 오류 규칙
-
-- Pydantic 요청 오류: HTTP 422
-- 명시적 쿼리 파라미터 오류: HTTP 400
-- 시스템 가드: HTTP 503
-- 스크리너 실행 중 오류: HTTP 200 SSE 연결 안의 `error` 이벤트일 수 있음
-- KIS 오류: 호출 경로에 따라 HTTP 400 또는 빈 필터 결과
+SSE 소비자는 HTTP 성공만으로 계산 완료를 판단하지 않는다. [스크리너 계약](screener.md)과 [프론트엔드 처리](frontend.md)를 함께 확인한다.

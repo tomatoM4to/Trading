@@ -1,5 +1,12 @@
 # 데이터베이스와 메모리 모델
 
+## Current Decision
+
+OHLCV는 디스크 정본, 반복 필터용 MA만 메모리에 둔다. 연결 수명과 재구축 순서를 보존하는 것이 최적화보다 우선이다.
+
+- 구현 근거: [database.py](../app/core/database.py), [ma_calculator.py](../app/core/ma_calculator.py), [bootstrap.py](../app/core/bootstrap.py)
+- 함께 읽기: [아키텍처](architecture.md), [수집](scheduler.md), [운영](operations.md)
+
 ## 저장 계층
 
 시스템은 주 데이터용 디스크 SQLite와 이동평균 전용 Shared In-Memory SQLite를 사용한다.

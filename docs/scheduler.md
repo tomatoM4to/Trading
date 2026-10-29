@@ -1,5 +1,12 @@
 # 스케줄러와 수집 파이프라인
 
+## Current Decision
+
+수집은 KIS 전역 큐로 직렬화하고 종목 단위로 저장한다. MA는 API 페이지 순서가 아니라 저장된 OHLCV의 시간순으로 재계산한다.
+
+- 구현 근거: [scheduler.py](../app/core/scheduler.py), [bootstrap.py](../app/core/bootstrap.py), [일봉](../app/tasks/daily_ohlcv_scheduler.py), [분봉](../app/tasks/minute_ohlcv_scheduler.py)
+- 함께 읽기: [데이터베이스](database.md), [KIS](kis-integration.md), [운영](operations.md)
+
 ## SystemScheduler
 
 `SystemScheduler`는 프로세스 내 단일 `AsyncIOScheduler`를 감싼 싱글턴이다. 각 작업은 `max_instances=1`, `coalesce=True`로 등록된다. 시간대는 서버와 컨테이너의 `Asia/Seoul` 설정을 전제로 한다.

@@ -1,24 +1,34 @@
-# 프로젝트 문서 지도
+# Documentation Map
 
-이 디렉터리는 현재 코드베이스의 동작을 설명한다. 과거 결정의 연대기보다 현재 구현 계약과 운영 경계를 우선한다. 동작이 바뀌면 코드 변경과 같은 작업에서 관련 문서를 함께 갱신한다.
+문서는 **작업 계약 → 현재 구조 → 주제별 결정 → 검증 근거** 순서로 읽는다. 구현의 최종 근거는 코드이며, 이 디렉터리는 왜 그 구조를 선택했는지와 어떻게 확인할지를 연결한다.
 
-| 문서 | 내용 | 주요 소스 |
+## Start Here
+
+1. 실행하려면 [루트 README](../README.md)와 [환경 설정](environment.md).
+2. 수정하려면 [AGENTS.md](../AGENTS.md)와 [아키텍처](architecture.md).
+3. 성능 개선 과정을 보려면 [벤치마크](benchmark.md). 원본 CSV와 측정 조건까지 함께 확인한다.
+4. 검증·배포하려면 [운영과 검증](operations.md), [배포](deployment.md).
+
+## Topic Map
+
+| 주제 | 문서에 남기는 내용 | 구현 진입점 |
 |---|---|---|
-| [architecture.md](architecture.md) | 전체 구성, 시작·종료 흐름, 모듈 경계 | `app/main.py`, `app/core/`, `web/` |
-| [database.md](database.md) | 메모리/디스크 DB, 스키마, 연결 수명주기 | `app/core/database.py`, `app/core/ma_calculator.py` |
-| [kis-integration.md](kis-integration.md) | 인증, 전역 큐, HTTP 호출 규칙 | `app/core/kis_auth.py`, `app/core/kis_fetch.py` |
-| [scheduler.md](scheduler.md) | 예약 작업, 수집기, 부트스트랩, GC | `app/core/scheduler.py`, `app/tasks/` |
-| [screener.md](screener.md) | AST, 비용 정렬, 필터, SSE | `app/services/screener_service.py` |
-| [api.md](api.md) | FastAPI 엔드포인트와 응답 계약 | `app/routes/`, `app/schemas/` |
-| [frontend.md](frontend.md) | Next.js 화면, 차트 집계, SSE 소비 | `web/app/`, `web/components/`, `web/lib/` |
-| [environment.md](environment.md) | 설정 파일과 로컬 실행 | `.env`, `kis_devlp.yaml`, `pyproject.toml` |
-| [deployment.md](deployment.md) | 이미지 빌드, 배포, Nginx, SSL | `Dockerfile`, `docker-compose.yml`, `.github/workflows/` |
-| [operations.md](operations.md) | 상태 확인, 수동 작업, 검증과 알려진 위험 | `/health`, `/admin/*` |
+| [Architecture](architecture.md) | 책임 경계·데이터 흐름·구조 선택 | [main](../app/main.py), [core](../app/core/) |
+| [Database](database.md) | 정본·메모리 수명·MA 재구축 계약 | [database](../app/core/database.py), [MA](../app/core/ma_calculator.py) |
+| [KIS Integration](kis-integration.md) | 인증·전역 큐·호출 제한 | [auth](../app/core/kis_auth.py), [fetch](../app/core/kis_fetch.py) |
+| [Scheduler](scheduler.md) | 수집 순서·부트스트랩·GC 경계 | [scheduler](../app/core/scheduler.py), [tasks](../app/tasks/) |
+| [Screener](screener.md) | AST 의미론·후보 축소·SSE | [service](../app/services/screener_service.py), [schema](../app/schemas/screener.py) |
+| [API](api.md) | HTTP 경계·인증·부수 효과 | [routes](../app/routes/), [schemas](../app/schemas/) |
+| [Frontend](frontend.md) | 필터·차트 데이터 흐름·타입 계약 | [web](../web/), [작업 규칙](../web/AGENTS.md) |
+| [Environment](environment.md) | 로컬 설정·자격 증명·실행 | [pyproject](../pyproject.toml), [package](../web/package.json) |
+| [Deployment](deployment.md) | 배포 절차·중단·미구현 품질 게이트 | [workflows](../.github/workflows/), [Compose](../docker-compose.yml) |
+| [Operations](operations.md) | 운영 점검·안전한 검증·장애 대응 | [dependencies](../app/core/dependencies.py), [tests](../tests/) |
+| [Benchmark](benchmark.md) | 현재 판단·개선 기록·측정 조건·원본 | [측정 스크립트](../scripts/benchmark_screener.py), [원본 CSV](benchmark-result/) |
 
-## 문서 사용 원칙
+## Maintenance
 
-1. `AGENTS.md`에서 전역 불변 원칙을 확인한다.
-2. 현재 작업과 관련된 문서 한두 개만 읽는다.
-3. 문서의 주요 소스 파일에서 현재 구현을 확인한다.
-4. 코드와 문서가 충돌하면 코드를 현재 상태의 근거로 삼고 충돌을 보고한다.
-5. 새로 비싼 결정을 내릴 때는 별도 ADR을 자동 생성하지 말고, 우선 해당 기능 문서의 설계 근거와 제약을 갱신한다.
+- 함수·상수·필드 전체 목록을 여러 문서에 복제하지 않는다. 세부 계약은 소스로 연결한다.
+- 결정의 배경·대안·한계는 해당 주제에 남긴다. 별도 ADR을 만들지 않는다.
+- 측정 기록은 목적, 조건, 결과, 결정, 한계, 원본 경로를 함께 남긴다.
+- 과거 브랜치의 검증 자산은 출처 커밋을 고정한다. 현재 main에 반영된 것처럼 설명하지 않는다.
+- 문서·코드·측정이 충돌하면 근거와 미확인 부분을 분리한다. 재실행하지 않은 측정에 새 검증 날짜를 붙이지 않는다.
