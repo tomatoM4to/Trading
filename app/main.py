@@ -11,6 +11,7 @@ from core.scheduler import SystemScheduler
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes import admin, market, screener
+from tasks.minute_ohlcv_scheduler import stop_minute_scheduler_task
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -27,13 +28,14 @@ def background_task_done(task: asyncio.Task) -> None:
         logger.error("Background initialization failed: %s", error)
 
 
-async def cancel_background_tasks(tasks: list[asyncio.Task]) -> None:
-    """Cancel and await application-owned background tasks during shutdown."""
+async def shutdown_background_tasks(tasks: list[asyncio.Task]) -> None:
     active_tasks = [task for task in tasks if not task.done()]
     for task in active_tasks:
         task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+    await stop_minute_scheduler_task()
+    await stop_q_worker()
 
 
 @asynccontextmanager
@@ -109,8 +111,12 @@ async def lifespan(app: FastAPI):
         logger.info("Application shutting down...")
         if system_scheduler:
             system_scheduler.stop()
-        await cancel_background_tasks(background_tasks)
-        await stop_q_worker()
+        shutdown = asyncio.create_task(shutdown_background_tasks(background_tasks))
+        try:
+            await asyncio.shield(shutdown)
+        except asyncio.CancelledError:
+            await shutdown
+            raise
 
 
 app = FastAPI(

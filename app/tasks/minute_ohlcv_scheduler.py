@@ -457,27 +457,48 @@ async def run_minute_ohlcv_scheduler(
 _running_minute_scheduler_task: asyncio.Task | None = None
 
 
-async def start_minute_scheduler_task(markets: list[str] | None = None):
+def _minute_scheduler_done(task: asyncio.Task) -> None:
+    global _running_minute_scheduler_task
+    if _running_minute_scheduler_task is task:
+        _running_minute_scheduler_task = None
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error("Minute OHLCV collector failed: %s", error)
+
+
+async def start_minute_scheduler_task(
+    markets: list[str] | None = None,
+) -> asyncio.Task:
     global _running_minute_scheduler_task
     if (
         _running_minute_scheduler_task is not None
         and not _running_minute_scheduler_task.done()
     ):
-        return False
+        return _running_minute_scheduler_task
 
     loop = asyncio.get_running_loop()
     _running_minute_scheduler_task = loop.create_task(
         run_minute_ohlcv_scheduler(markets)
     )
-    return True
+    _running_minute_scheduler_task.add_done_callback(_minute_scheduler_done)
+    return _running_minute_scheduler_task
 
 
-def stop_minute_scheduler_task():
+async def stop_minute_scheduler_task() -> None:
     global _running_minute_scheduler_task
-    if (
-        _running_minute_scheduler_task is not None
-        and not _running_minute_scheduler_task.done()
-    ):
-        _running_minute_scheduler_task.cancel()
-        return True
-    return False
+    task = _running_minute_scheduler_task
+    if task is None:
+        return
+    if not task.done() and not task.cancelling():
+        task.cancel()
+    completion = asyncio.gather(task, return_exceptions=True)
+    try:
+        await asyncio.shield(completion)
+    except asyncio.CancelledError:
+        await completion
+        raise
+    finally:
+        if _running_minute_scheduler_task is task and task.done():
+            _running_minute_scheduler_task = None

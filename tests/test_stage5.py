@@ -74,6 +74,192 @@ async def test_start_failure_after_queue_creation_stops_owned_worker(sandbox):
         stop.assert_called_once()
 
 
+async def test_bootstrap_and_scheduled_minute_start_share_one_collector(sandbox):
+    from core.scheduler import SystemScheduler
+
+    from tasks import minute_ohlcv_scheduler as minute
+
+    entered = asyncio.Event()
+    collectors = []
+
+    async def collect(markets=None):
+        collectors.append(asyncio.current_task())
+        entered.set()
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(minute, "_running_minute_scheduler_task", None),
+        patch.object(minute, "run_minute_ohlcv_scheduler", collect),
+    ):
+        scheduled = None
+        try:
+            await minute.start_minute_scheduler_task()
+            await asyncio.wait_for(entered.wait(), 2)
+            scheduled = asyncio.create_task(
+                SystemScheduler().start_minute_scheduler_job()
+            )
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert len(collectors) == 1
+            scheduled.cancel()
+            await asyncio.gather(scheduled, return_exceptions=True)
+            assert not collectors[0].done()
+            await minute.start_minute_scheduler_task()
+            await asyncio.sleep(0)
+            assert len(collectors) == 1
+        finally:
+            tasks = [*collectors, *([scheduled] if scheduled else [])]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def test_minute_stop_drains_cleanup_despite_cancelled_and_repeated_callers():
+    from tasks import minute_ohlcv_scheduler as minute
+
+    entered, cleaning, release, finished = (asyncio.Event() for _ in range(4))
+
+    async def collect(markets=None):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+            finished.set()
+
+    with (
+        patch.object(minute, "_running_minute_scheduler_task", None),
+        patch.object(minute, "run_minute_ohlcv_scheduler", collect),
+    ):
+        collector = await minute.start_minute_scheduler_task()
+        stops = []
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            stops.append(asyncio.create_task(minute.stop_minute_scheduler_task()))
+            await asyncio.wait_for(cleaning.wait(), 2)
+            stops.append(asyncio.create_task(minute.stop_minute_scheduler_task()))
+            stops[0].cancel()
+            await asyncio.sleep(0)
+            assert all(not task.done() for task in stops)
+            assert not collector.done()
+            assert await minute.start_minute_scheduler_task() is collector
+            release.set()
+            await asyncio.wait_for(asyncio.gather(*stops, return_exceptions=True), 2)
+            assert stops[0].cancelled()
+            assert stops[1].result() is None
+            assert finished.is_set()
+            assert collector.cancelled()
+            assert minute._running_minute_scheduler_task is None
+            restarted = await minute.start_minute_scheduler_task()
+            assert restarted is not collector
+            await minute.stop_minute_scheduler_task()
+            assert restarted.done()
+        finally:
+            release.set()
+            await minute.stop_minute_scheduler_task()
+            await asyncio.gather(*stops, return_exceptions=True)
+
+
+async def test_background_minute_failure_is_reported_and_can_restart():
+    from tasks import minute_ohlcv_scheduler as minute
+
+    error = RuntimeError("minute collection failed")
+
+    async def fail(markets=None):
+        raise error
+
+    with (
+        patch.object(minute, "_running_minute_scheduler_task", None),
+        patch.object(minute, "run_minute_ohlcv_scheduler", fail),
+        patch.object(minute.logger, "error") as log,
+    ):
+        failed = await minute.start_minute_scheduler_task()
+        await asyncio.wait({failed})
+        log.assert_called_once_with("Minute OHLCV collector failed: %s", error)
+        assert minute._running_minute_scheduler_task is None
+        restarted = await minute.start_minute_scheduler_task()
+        assert restarted is not failed
+        await minute.stop_minute_scheduler_task()
+        assert restarted.done()
+
+
+@pytest.mark.parametrize("serving_failure", [False, True])
+@pytest.mark.parametrize("cancel_shutdown", [False, True])
+async def test_lifespan_stops_bootstrap_minute_workers_before_kis_queue(
+    sandbox, serving_failure, cancel_shutdown
+):
+    import os
+    import threading
+
+    from core import bootstrap, kis_fetch
+    from main import app, lifespan
+
+    from tasks import minute_ohlcv_scheduler as minute
+
+    sandbox.stock()
+    baseline = asyncio.all_tasks()
+    gate = threading.Event()
+    queue_stopping = asyncio.Event()
+    stopped_collectors = []
+    stop_queue = kis_fetch.stop_q_worker
+
+    async def stop_observed_queue():
+        stopped_collectors.append(collector.done())
+        queue_stopping.set()
+        await stop_queue()
+
+    with (
+        patch.dict(os.environ, {"SCHED": "True"}),
+        patch("main.init_sqlite_connection"),
+        patch("core.kis_auth.auth"),
+        patch("main.SystemScheduler.start"),
+        patch("main.SystemScheduler.stop"),
+        patch.object(bootstrap, "run_daily_ohlcv_scheduler"),
+        patch.object(bootstrap, "rebuild_ma_database"),
+        patch.object(minute, "_running_minute_scheduler_task", None),
+        patch("main.stop_q_worker", stop_observed_queue),
+        FakeTransport([response([])], gate=gate) as transport,
+    ):
+        context = lifespan(app)
+        closing = None
+        collector = None
+        try:
+            await context.__aenter__()
+            assert await asyncio.to_thread(transport.entered.wait, 2)
+            collector = minute._running_minute_scheduler_task
+            error = RuntimeError("serving failed") if serving_failure else None
+            closing = asyncio.create_task(
+                context.__aexit__(type(error) if error else None, error, None)
+            )
+            await asyncio.wait_for(queue_stopping.wait(), 2)
+            assert stopped_collectors == [True]
+            if cancel_shutdown:
+                closing.cancel()
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                assert not closing.done()
+            gate.set()
+            await asyncio.wait_for(asyncio.gather(closing, return_exceptions=True), 2)
+            if cancel_shutdown:
+                assert closing.cancelled()
+            else:
+                closing.result()
+            assert collector.done()
+            assert kis_fetch._kis_queue is None
+            assert kis_fetch._kis_worker_task is None
+            assert asyncio.all_tasks() == baseline
+        finally:
+            gate.set()
+            if collector is not None:
+                if not collector.done():
+                    collector.cancel()
+                await asyncio.gather(collector, return_exceptions=True)
+            if closing is not None:
+                await asyncio.gather(closing, return_exceptions=True)
+            await stop_queue()
+
+
 @contextmanager
 def deny_sqlite_read(module, table, column=None):
     connect = module.connect_sqlite

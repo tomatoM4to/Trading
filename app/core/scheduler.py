@@ -156,12 +156,13 @@ class SystemScheduler:
 
     async def start_minute_scheduler_job(self) -> None:
         """장중 분봉 수집 스케줄러를 시작하는 Job."""
-        from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
+        from tasks.minute_ohlcv_scheduler import start_minute_scheduler_task
 
         try:
             logger.sched("Starting scheduled minute OHLCV collector...")
             # 분봉 수집기는 15:55까지 무한루프를 돌며 작동함
-            await run_minute_ohlcv_scheduler()
+            task = await start_minute_scheduler_task()
+            await asyncio.shield(task)
             logger.sched("Scheduled minute OHLCV collector finished naturally.")
         except asyncio.CancelledError:
             raise
