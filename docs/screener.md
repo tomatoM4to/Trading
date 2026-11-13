@@ -1,94 +1,92 @@
-# 스크리너 엔진
+# Overview
 
-## 요청 모델
+- 조건식의 실행 순서가 달라져도 같은 종목과 필터값을 반환한다.
+- 후보 축소와 MA 사전 계산으로 비용을 줄이며 필터 논리와 실패 의미를 유지한다.
 
-`POST /api/screener/run`은 다음 형태의 AST를 받는다.
+# Checkpoints
 
-```json
-{
-  "filters": [
-    {
-      "id": "filter-1",
-      "type": "ma_alignment",
-      "params": {
-        "lines": ["ma_daily_5", "ma_daily_20"],
-        "duration": 3
-      }
+- AND를 OR보다 먼저 결합하고 AND 체인 내부에서만 재정렬해 조건식의 의미를 보존한다. [논리 검증](../tests/test_stage4.py)
+- 모든 필터에 거래정지·관리종목 제외를 적용하고, 제외 후에도 원본 랭킹 순번을 유지한다. [자격 검증](../tests/test_stage4.py)
+- 앞선 후보만 다음 SQL에 전달하고 빈 교집합의 후속 실행을 생략해 불필요한 조회를 줄인다. [실행 계획](../app/services/screener_service.py)
+- 비용 정렬은 고정 추정이므로 최적 순서를 보장하지 않으며, 성능 비교 전에 결과 동등성을 확인한다. [측정 근거](benchmark.md#과거-http-측정-기록)
+- MA 조건은 시간축 혼합·기간 중복을 금지하고 일봉 300봉·분봉 390봉 한도를 보존량과 함께 유지한다. [저장 계약](database.md#checkpoints)
+- 기간 부족의 `NULL`은 해당 조건의 계산 불가이며 시스템 초기화 실패와 구별한다. [필터 판정](../app/services/screener_service.py)
+- 이격도는 유효한 MA가 존재하는 최신 공통 timestamp의 `현재가 / MA × 100`으로 계산한다. [이격도 검증](../tests/test_stage4.py)
+- 거래량 돌파는 현재 봉을 제외한 최대 거래량 봉의 고가와 비교하며, 동률이면 최신 봉을 택한다. [산술 검증](../tests/test_stage4.py)
+- `1M/3M/2H/4H`는 30/60/120/240개 캔들이며 실제 달력 월이나 경과시간을 보장하지 않는다. [기간 매핑](../app/services/screener_service.py)
+- 결과 거래대금은 최근 저장 분봉의 원본 누적값과 KST 기준 시각을 제공하며, 원본이 없으면 `NULL`이다. [결과 계약](../app/schemas/screener.py)
+- SSE는 진행 상태를 전달하고 `complete/error`로 종료하며, 외부 실패를 정상 0건이나 부분 성공으로 바꾸지 않는다. [스트림 검증](../tests/test_stage4.py)
+- MA 미준비는 새 요청에서 503, 진행 중 스트림에서 오류로 전달하며 요청 전체의 동일 DB snapshot은 보장하지 않는다. [가드](../app/core/dependencies.py), [검색 엔진](../app/services/screener_service.py)
+- 생략한 후속 필터에는 `start` 없이 0건 `progress`를 보낼 수 있으며, 오류가 발생하면 반복을 중단한다. [SSE 구현](../app/services/screener_service.py)
+- 주·월 차트는 KST 거래일로 묶고 마지막 유효 원본 MA를 표시하므로 일봉 MA5가 5주 MA로 바뀌지 않는다. [차트 집계](../web/lib/chart-utils.ts)
+- SQL 식별자는 화이트리스트를 사용하고 임계값·종목은 바인딩하나, 기간 일부의 검증 후 문자열 삽입은 AGENTS 원칙과 남아 있는 차이다. [현재 구현](../app/services/screener_service.py), [원칙](../AGENTS.md)
+- 조건 추가 시 UI·서버·독립 기대값의 단위를 맞추고, 브라우저 종료·취소·재연결은 서버 SSE 검증과 별도로 확인한다. [UI](../web/components/screener/ScreenerBuilder.tsx), [검증 한계](testing.md#검증의-한계)
+
+# Diagrams
+
+## 조건식과 실행 계획 - 클래스 다이어그램
+
+```mermaid
+classDiagram
+    direction LR
+    class ScreenerRequest {
+        filters
+        operations AND_OR
     }
-  ],
-  "operations": []
-}
+    class FilterNode {
+        id
+        type
+        params
+    }
+    class OrPlan {
+        AND 체인의 합집합
+    }
+    class AndChain {
+        비용 순 실행
+        후보 교집합
+    }
+    class FilterResult {
+        ticker
+        filter_values
+    }
+    ScreenerRequest "1" *-- "1..*" FilterNode
+    ScreenerRequest ..> OrPlan : OR 경계로 분할
+    OrPlan "1" *-- "1..*" AndChain
+    AndChain --> FilterNode : 체인 내부에서만 재정렬
+    FilterNode --> FilterResult : 자격 후보에 조건 적용
+    OrPlan --> FilterResult : 종목과 조건값 병합
 ```
 
-`operations`의 길이는 항상 `filters - 1`이어야 하며 값은 `AND` 또는 `OR`이다. 현재 `FilterNode.params`는 `dict[str, Any]`이므로 각 handler가 자기 파라미터의 타입과 범위를 검증할 책임이 있다.
+## 검색 요청과 결과 전달 - 시퀀스 다이어그램
 
-## 파이프라인 의미론
+```mermaid
+sequenceDiagram
+    participant U as 스크리너 UI
+    participant G as FastAPI 가드
+    participant E as 검색 엔진
+    participant F as 로컬 SQL / KIS 랭킹
+    U->>G: 조건식 POST
+    alt 시스템 또는 MA 미준비
+        G-->>U: HTTP 503
+    else 요청 허용
+        G->>E: SSE 시작
+        loop AND 체인별 실행 필터
+            E-->>U: start
+            E->>F: 자격 후보 + 조건
+            F-->>E: 종목과 필터값 또는 예외
+            E-->>U: 성공 시 progress
+        end
+        alt 실행·준비 상태 확인 성공
+            E-->>U: complete + 최종 결과
+        else 외부·DB·입력·준비 상태 오류
+            E-->>U: error + 사유
+        end
+        U->>U: terminal 수신 후 스트림 중단
+    end
+```
 
-1. OR을 기준으로 요청을 여러 AND 체인으로 나눈다.
-2. 각 AND 체인은 추정 비용이 낮은 필터부터 실행한다.
-3. 체인 안에서는 이전 결과의 ticker만 다음 필터에 전달한다.
-4. 필터 결과는 `dict[str, dict[str, float]]`로 유지한다.
-5. AND 교집합은 ticker를 기준으로 병합하고 OR 체인은 합집합한다.
-6. 마지막에 종목 이름, 시장, 최근 가격·거래대금·등락률을 보강한다.
+# Tests
 
-전 종목 OHLCV를 Pandas로 올리지 않는다. 후보 축소는 SQL `WHERE ticker IN (...)`과 파이썬 딕셔너리 교집합을 사용한다.
+[Stage 4](../tests/test_stage4.py)는 SQL 결과를 독립 Python 산술·집합 결과와 비교한다. MA 조건·이격도·거래량 돌파, AND/OR 조합, 랭킹 우선 실행의 자격 보존, 비정상 랭킹과 정상 0건, 단일 terminal 이벤트, 전체 차트 OHLCV·MA·timestamp를 확인한다.
 
-## 지원 필터
-
-| type | 핵심 파라미터 | 데이터 원천 |
-|---|---|---|
-| `ma_alignment` | `lines`, `duration` | `daily_ma` 또는 `minute_ma` |
-| `ma_cross` | `short_line`, `long_line`, `direction`, `within` | MA DB |
-| `ma_convergence_consolidation` | `lines`, `threshold`, `duration` | MA DB |
-| `ma_convergence_point` | `lines`, `threshold`, `within` | MA DB |
-| `foreign_net_buy_rank` | `limit` | KIS 랭킹 API |
-| `inst_net_buy_rank` | `limit` | KIS 랭킹 API |
-| `disparity_value` | `line`, `threshold`, `direction` | OHLCV + attached MA DB |
-| `volume_peak_breakout` | `lookback` | 일봉 또는 분봉 OHLCV |
-
-허용 MA 기간은 `5, 10, 20, 60, 120, 200`이다. 컬럼명은 `_validate_ma_line()`을 통과한 값만 SQL에 사용한다. 기간 값은 일봉 최대 300, 분봉 최대 390 범위에서 정수로 검증한다.
-
-## 비용 정렬
-
-- 투자자 랭킹: 비용 0으로 먼저 실행해 최대 30개 후보로 축소
-- 이격도·거래량 피크: 고정 저비용
-- MA 계열: 기간 × 선 개수 × 시간 프레임 가중치
-- 알 수 없는 필터: 가장 높은 기본 비용
-
-정렬은 AND 내부에서만 수행하며 논리 결과를 보존해야 한다. 모든 필터의 공통 실행 경계에서 `is_halted=0 AND is_admin_issue=0`인 종목만 후보로 전달한다. 랭킹 단독·랭킹 우선·로컬 필터 우선에서 동일한 자격 기준을 적용하며, 제외된 종목 때문에 원본 랭킹 순번을 다시 매기지 않는다. 순서에 따른 자격 차이의 최초 재현은 [T09](test-defects.md#t09--비용-정렬로-거래정지-종목-포함-여부-변경)에 보존한다.
-
-## SSE 계약
-
-응답 Content-Type은 `text/event-stream`이며 각 메시지는 JSON을 `data:`에 담는다.
-
-| type | 필드 | 의미 |
-|---|---|---|
-| `start` | `filter_id` | 해당 필터 실행 시작 |
-| `progress` | `filter_id`, `remaining` | 필터 완료와 남은 후보 수 |
-| `complete` | `items` | 종목 정보와 `filter_values`를 포함한 최종 결과 |
-| `error` | `message` | 파이프라인 내부 오류 |
-
-SSE generator 내부 오류는 HTTP 상태를 바꾸지 않고 `error` 이벤트로 전달된다. 프론트엔드는 complete/error에서 AbortController로 스트림을 종료한다.
-
-KIS 랭킹의 HTTP 실패·실패 `rt_cd`·잘못된 output 또는 종목코드 행은 예외를 전파해 `error` terminal로 끝난다. 정상 빈 목록만 `complete, items=[]`로 전달한다. 잘못된 일부 행을 버리고 부분 결과를 성공으로 반환하지 않는다.
-
-MA 초기화 전·실패·종목별 갱신 실패가 미복구인 경우 스크리너 요청은 503이다. 각 필터와 최종 결과 직전에도 준비 상태를 확인해 진행 중 실패를 정상 `complete`로 제공하지 않는다. MA 기간 부족의 NULL은 초기화 실패와 구별하며 해당 조건에서만 종목을 제외한다.
-
-`amount`는 **최근 저장 분봉 거래일의 해당 시점까지 누적 거래대금**이다. 분봉별 amount의 합이나 최신 단위 분봉 대금이 아니라 `cumulative_amount` 원본을 사용하므로 일부 분봉이 없어도 원본 누적값을 표시할 수 있다. 원본이 없으면 NULL이다. `amount_asof`는 KST 기준 시각이며, 장 마감·휴장일에도 최근 저장 시점을 그대로 반환한다. UI의 거래대금 형식과 NULL 표시는 유지하고 기준 시각을 툴팁으로 표시한다.
-
-## 입력 안전 규칙
-
-- 식별자는 정적 화이트리스트만 허용한다.
-- 숫자는 `int` 또는 유한한 `float`로 변환한 뒤 범위를 확인한다.
-- 값은 SQL placeholder로 바인딩한다.
-- direction, lookback과 filter type은 고정 집합으로 검증한다.
-- `limit`은 KIS 반환 한도 30을 넘지 않게 제한한다.
-
-수렴 임계값은 0~100, 이격도 임계값은 0~1000 범위의 유한한 숫자만 허용하고 SQL placeholder로 바인딩한다. 투자자 랭킹 limit은 1~30 범위의 정수만 허용한다. 일봉 여부는 MA 컬럼명으로 정규화하기 전 요청 식별자에서 판별한다.
-
-- 하나의 MA 필터에서 일봉과 분봉을 혼합하거나 동일 기간을 중복 선택할 수 없다.
-- 이격도는 `현재가 / 이동평균 × 100`인 지수다. 100은 MA와 동일, 105는 MA보다 5% 위를 뜻한다.
-- 이격도는 OHLCV와 MA가 모두 존재하는 최신 동일 timestamp에서 계산한다.
-- 최대 거래량 매물대는 현재 캔들을 제외한 이전 N개 캔들에서 찾고, 거래량 동률이면 최신 캔들을 선택한다.
-
-기존 회귀 테스트는 교체됐다. [새 하네스](testing.md)의 Stage 4는 실제 파이프라인과 모든 로컬 필터의 독립 산술 참조, AND/OR·최적화·SSE를 비교한다. T10과 T12는 수정했고 Windows·Linux의 이격도 4개 산술 사례를 검증했다. [수정 이력](test-defects.md)을 함께 확인한다. 합성 입력 검증을 실제 KIS 원본 검증으로 해석하지 않는다.
+[차트 유틸 테스트](../web/lib/chart-utils.test.mjs)는 MA 예열 중 그룹 시작 시각과 서울·LA·UTC·키리티마티의 동일 집계를 확인한다. 이는 실제 브라우저 렌더링 검증을 대신하지 않는다. 성능 근거는 [Benchmark](benchmark.md), 실행 방법은 [정합성 테스트](testing.md)에 둔다.
