@@ -2,7 +2,7 @@
 
 ## Overview
 
-하네스의 최초 목표는 운영 코드 변경 없이 기존 구현의 결함을 검출하는 것이었다. 이전 테스트 기대값을 이식하지 않았으며 실제 스키마·수집기·Queue·SQL 필터·라우터를 실행한다. 이후 결함 수정 시에도 `xfail`, skip 또는 완화한 기대값으로 실패를 숨기지 않는다. 수정 현황은 [결함 보고서](test-defects.md#수정-이력)를 따른다. 미해결 결함 때문에 기본 명령은 현재 **종료 코드 1**을 반환한다.
+하네스의 최초 목표는 운영 코드 변경 없이 기존 구현의 결함을 검출하는 것이었다. 이전 테스트 기대값을 이식하지 않았으며 실제 스키마·수집기·Queue·SQL 필터·라우터를 실행한다. 이후 결함 수정 시에도 `xfail`, skip 또는 완화한 기대값으로 실패를 숨기지 않는다. 수정 현황은 [결함 보고서](test-defects.md#수정-이력)를 따른다. 현재 기본 명령은 **126개 통과, 종료 코드 0**이다.
 
 계획은 자산 조사 → 격리/계산 → 수집 → Queue → API/집계 → 복구/자원 측정 → 독립 검토 순으로 실행했다. 각 Stage는 이전 Stage의 통과를 요구하지 않는다.
 
@@ -15,8 +15,8 @@
 | `tests/test_screener_logic.py` | 일부 SQL 경계와 MA 회귀. 메모리 주 DB 사용으로 디스크 ATTACH 차이 미검출 | 삭제 |
 | `tests/test_regressions.py` | 보안 입력, Queue 재시작, 일부 쿼리. 전송·수집 전체 비교 없음 | 삭제 |
 | 기존 고정 Fixture | 별도 원본 자료 없이 각 테스트 내부에서 임시 행/Mock 구성 | 재사용하지 않음 |
-| `app/services/admin_test_service.py`, `admin_daily_service.py`, `admin_minute_service.py`와 `/admin/test/*` | 운영 DB 표본·실제 KIS·고정 테스트 파일 사용. 행 수/표본 비교로 완전한 정합성을 보장하지 못함. MA URI는 ContextVar로 분리되지 않음 | 공개 API 보존 제약에 따라 유지. 기본 하네스에서 실행하지 않음 |
-| `test_db_var`, `test_mem_var`, 전역 Queue, MA keepalive | 운영 관리자 기능/수집 경로에서 사용하는 공용 자산 | 유지 |
+| `app/services/admin_test_service.py`, `admin_daily_service.py`, `admin_minute_service.py`와 `/admin/test/*` | 운영 DB 표본·실제 KIS·고정 파일 사용, MA 비격리. pytest가 수집·복구·실패 검증을 대체하고 내부/UI 호출자 없음 | 잔여 결함 작업에서 삭제. `/admin/live/*`와 GC 유지 |
+| `test_db_var`, `test_mem_var`, 전역 Queue, MA keepalive | 격리 하네스와 운영 수집 경계에서 사용 | 유지 |
 | `scripts/benchmark_screener.py` | HTTP SSE 측정. `error` 또는 `complete` 없는 EOF도 Success가 될 수 있고 기대 종목 검증이 없음 | 오프라인·정답 비교를 선행하는 측정기로 교체 |
 | `docs/benchmark-result/*.csv` | 과거 조건별 실험 기록 | 원문 보존 |
 
@@ -44,9 +44,9 @@ KIS Code Assistant MCP의 search/read_source_code로 [일봉 공식 예제](http
 - `tests/conftest.py`의 `pytest_configure`가 테스트 모듈 수집 전에 `OfflineEnvironment`를 시작한다. 실제 KIS 설정의 **정확한 경로만** 합성 설정으로 대체한다. `.env`나 토큰 캐시를 사용하지 않는다. 인증 단독 테스트의 `config_root`도 임시 경로다. `tests.support`를 import하는 것만으로는 전역 패치를 설치하지 않는다.
 - HTTP Session 및 socket 외부 연결을 차단한다. Windows `asyncio` 내부 `socket._fallback_socketpair`의 자체 연결만 허용한다. 데이터 통합 테스트는 `requests.get/post`만 Fake로 교체하고 `_do_fetch`, Queue와 0.1초 대기는 실행한다. 전송 예산을 넘으면 Fake가 실패한다. Cold 테스트는 URL/TR/종목/조회 기간/플래그/timeout도 비교한다.
 - 테스트별 임시 디스크 DB + UUID MA URI + 실제 `init_sqlite_connection()`을 사용한다. ContextVar뿐 아니라 환경 경로와 `_MA_MEM_DB_URI`, keepalive를 분리한다. 모든 Python `sqlite3.connect`와 SQL ATTACH 대상을 검사한다. 운영 MA URI 및 임시 루트 밖 DB는 거부한다.
-- 디스크 연결의 URI 해석이 꺼진 Windows에서 ATTACH 문자열이 파일로 해석되는 것까지 검증하기 위해, 테스트 작업 디렉터리도 임시 폴더로 바꾼다. 결함을 숨기려고 운영 연결에 `uri=True`를 강제하지 않는다.
+- 테스트 cwd도 임시 폴더다. T12 수정으로 운영 디스크 연결에 `uri=True`를 명시하며, 테스트 전용 설정으로 덮어쓰지 않는다. 바인딩된 ATTACH는 SQLite authorizer에 파일명이 NULL로 전달되므로 하네스가 바인딩 값을 먼저 검증하고 해당 execute 동안만 허용한다. 위험 literal·바인딩 URI는 계속 거부한다.
 - 함수 범위의 비동기 `sandbox` fixture가 테스트마다 DB를 초기화하고 Queue를 종료한다. 연결을 추적하고 종료 시 keepalive 이외 미종료 연결을 실패로 판정한 뒤 정리한다. ContextVar/환경/전역 URI를 복구한다. 장애 재현 중 남은 태스크·전송 gate도 각 테스트가 정리한다. 전역 패치와 cwd를 사용하므로 **동일 프로세스 병렬 테스트는 지원하지 않는다**.
-- 차트 API는 실제 앱의 라우터/가드를 사용하지만 TestClient lifespan은 시작하지 않는다. 랭킹 SSE는 AsyncClient·ASGITransport로 하네스와 같은 이벤트 루프에서 실행해 전역 Queue의 소유 루프를 유지한다. 앱의 실제 시작은 인증과 스케줄러를 실행하므로 사용하지 않는다. 프론트엔드 테스트는 사용자 요청으로 제거했으며 기본 하네스에는 Node/TypeScript가 필요하지 않다.
+- 차트 API는 실제 라우터/가드를 사용한다. 랭킹 SSE는 AsyncClient·ASGITransport로 같은 이벤트 루프에서 실행한다. Stage 5의 별도 lifespan 사례는 인증·예약 시작·외부 수집 경계만 격리하고 실제 초기화 태스크·MA 스레드·가드를 실행해 SCHED 양쪽의 대기/실패/성공을 확인한다. 기본 pytest에는 Node가 필요하지 않으며 차트 함수의 Node 회귀는 별도 명령이다.
 
 ## Tests
 
@@ -97,9 +97,51 @@ uv run --locked python -m tests.live_kis --allow-live --ticker 005930
 
 [benchmark.md](benchmark.md)의 오프라인 명령으로 별도 실행한다. 64종목의 고정 데이터에서 32개 종목과 모든 필터 값을 비교한 뒤에만 성공/시간을 기록한다. 원격 HTTP·실제 KIS는 사용하지 않는다. 빈 결과나 미완료 SSE를 성공으로 판정하지 않는다.
 
+### Docker Linux 검증
+
+운영 `Dockerfile`과 배포 Compose는 변경하지 않는다. `Dockerfile.test`만 개발 의존성을 설치하고 전용 ignore의 Python 코드·고정 JSON 허용 목록을 복사한다. `.env`, KIS 설정·토큰·DB와 운영 볼륨은 포함하지 않는다.
+
+```powershell
+docker build -f Dockerfile.test -t trading-test:fixed .
+docker run --rm --cpus=1 --memory=1g --network=none --read-only --tmpfs /tmp:rw,size=512m trading-test:fixed python -m pytest -q --tb=short -p no:cacheprovider
+docker run --rm --cpus=1 --memory=1g --network=none --read-only --tmpfs /tmp:rw,size=768m trading-test:fixed python scripts/benchmark_collection.py --tickers 4
+docker run --rm --cpus=1 --memory=1g --network=none --read-only --tmpfs /tmp:rw,size=768m trading-test:fixed python scripts/benchmark_screener.py --tickers 2400 --repeats 3
+docker run --rm --network=none --read-only --tmpfs /tmp:rw,size=32m trading-test:fixed python scripts/sqlite_probe.py
+cd web
+npm run test:chart
+npx tsc --noEmit
+```
+
+변경 전 이미지 `trading-test:baseline`은 `6c6b4d5` 소스와 같은 테스트 Dockerfile로 만들었다. 비교 측정 스크립트만 읽기 전용 mount로 추가해 동일 Fixture·제한에서 실행했다.
+
 ## 실행 결과와 한계
 
-### 후속 결함 수정 검증
+### 잔여 결함 최종 검증
+
+2026-11-13, Python 3.12.12. Windows SQLite 3.50.4 / Linux SQLite 3.40.1. 루트 `AGENTS.md`, Stage별 독립 기준과 기존 벤치마크를 확인하고 `git fetch origin dev`로 `6c6b4d5` 일치를 확인한 뒤 시작했다.
+
+| Stage | Windows 통과/실행 | Linux 통과/실행 |
+|---|---:|---:|
+| 1 | 10/10 | 10/10 |
+| 2 | 33/33 | 33/33 |
+| 3 | 9/9 | 9/9 |
+| 4 | 52/52 | 52/52 |
+| 5 | 22/22 | 22/22 |
+| 합계 | 126/126 | 126/126 |
+
+실패·오류·스킵은 0이다. Windows 37.62초·peak RSS 117.8MiB, 제한 Linux 25.80초·123.5MiB. 두 환경 모두 기존 AnyIO·TestClient 경고 2개는 숨기지 않았다. Node 22.20.0 차트 3개, 변경 TS/TSX와 테스트의 ESLint, TypeScript noEmit, 변경 Python 및 테스트·측정기의 Ruff check/format을 별도 확인했다.
+
+변경 전 같은 Windows 하네스는 97/102 통과(31.10초·117.5MiB)로 T12 4개와 최소 간격 1개가 실패했고, Linux는 102/102 통과(20.39초·122.7MiB)했다. 테스트 추가로 실행 범위가 달라 전체 시간 차이를 성능 회귀로 직접 비교하지 않는다. Windows에는 `USE_URI` 기본 설정이 없고 Linux에는 있어 URI off 결과가 달랐다. `sqlite_probe.py`는 전체 compile options와 URI on/off ATTACH의 파일명·공유 값을 출력한다.
+
+Stage 2는 보존/무효화/동시각 수정/날짜 변경/겹친 경계의 전체 OHLCV와 원본 누적값을 비교한다. 일봉은 인증된 500봉의 1회 증분, 내부 삭제의 깊은 복구, 예산 부족의 저장 거부, 짧은 이력 backfill·인증 거부를 검증한다. 최신 220봉의 반복 3페이지 계약은 유지하고, 검증된 500봉 사례에서만 조기 종료를 허용했다.
+
+Stage 5는 MA 두 테이블 rollback, cold/실패/복구, SCHED 양쪽, 종목 실패가 다른 종목 성공으로 해제되지 않는 점, 분봉 후속 요청 실패, 과거 snapshot 성공이 새 실패를 지우지 않는 경쟁을 확인한다. 독립 검토자 한 명이 실제 SQLite 잠금과 원본 commit으로 경계를 재현했고 보강했다. skip·xfail·임의 기대값 완화는 없다.
+
+2,400종목·2,616,000행의 제한 컨테이너 측정에서는 수정 후 Python peak RSS 279.23MiB, cgroup 전체 peak 424.75MiB로 정상 종료했다. 같은 입력의 스크리너 3회와 정상/최초/갭 수집 비교는 [benchmark.md](benchmark.md)에 조건과 수치를 보존했다. 1GiB 단기 생존의 근거이며 실제 운영 정합성·장시간 OOM의 보장은 아니다.
+
+추가 검증 필요: 실제 KIS 원본·장중 누적값·수정주가, API 응답 자체의 완전성, 장시간 인증/예약/수집 공존과 전체 heavy 필터 조합, 브라우저 렌더링·SSE 사용자 취소. 실제 KIS 호출과 운영 DB 읽기/쓰기는 수행하지 않았다. 페이지 밖 원본 정정은 다음 깊은 검증까지 지연될 수 있고, 원본 없는 레거시 분봉 경계는 NULL 무효화 후 기준 행 포함 재수집이 필요할 수 있다.
+
+### 이전 후속 결함 수정 검증
 
 같은 Windows 격리 환경에서 1단계는 Queue·수집기 수명주기 관련 18개, 2단계는 Stage 1·2·5 전체 44개를 통과했다. 종료를 기다리는 새 계약에 맞춰 전송 gate를 동시에 해제하도록 테스트를 바꿨으며, 실제 전송 직렬화·완료 후 0.1초·Future 완료 판정은 유지했다. 일봉 반복 검증은 보존구간의 모든 응답 페이지를 제공하고 호출 수를 검증한다. 분봉 변환·MA 실패는 명시적 예외 전파를 요구한다. 최초 실패 기대값을 완화하거나 skip하지 않았다.
 
@@ -137,7 +179,9 @@ uv run --locked python -m tests.live_kis --allow-live --ticker 005930
 
 독립 검토자는 Windows ATTACH를 순수 SQLite로 재현했다. 차트 timestamp/일봉 overlay 누락과 전송 요청 종목 검증 누락도 지적했다. 둘 다 보강 후 원본 통과, 응답 MA 또는 요청 종목을 훼손한 mutation 실패를 확인했다. 테스트 검토 때문에 운영 코드를 수정하지 않았다.
 
-| 미검증 영역 | 이유와 후속 검증 |
+아래는 최초 하네스 당시의 미검증 범위다. 현재 Linux·자원 제한·Node 검증은 위 후속 결과를 따른다.
+
+| 당시 미검증 영역 | 당시 이유와 후속 검증 |
 |---|---|
 | 실제 KIS 원본/수정주가/장중 누적값 | 이번 요청에서 실제 호출을 허용하지 않음. 합성 Fixture 통과는 증권사 데이터 정합성 증거가 아님 |
 | Linux ATTACH 동작 | Windows에서만 재현. Linux SQLite URI 기본 설정에 따라 달라질 수 있음 |
@@ -151,4 +195,4 @@ uv run --locked python -m tests.live_kis --allow-live --ticker 005930
 
 운영 코드 변경 없이 해결한 환경 문제는 의존성 설치, 내부 socketpair 예외, 임시 cwd/DB/MA 라우팅, 인증 설정 주입이다. timeout은 `pytest.raises`와 유한 대기로 확인하고 같은 worker의 후속 처리도 검증했다. 기존 AnyIO 플러그인의 pytest 10 예정 제거 API 경고와 TestClient의 httpx deprecation 경고 2건은 남아 있다. 관련 운영 의존성을 변경하거나 경고를 숨기지 않았다.
 
-백엔드 후속 작업 우선순위는 Queue 종료·재시작 직렬화/미완료 Future/수집 worker 소유권 → 분봉 수정·거래대금·MA 실패 상태 → 스크리너 정렬/외부 오류·API schema → 플랫폼 ATTACH다. 각 수정은 해당 실패 테스트를 보존한 별도 작업으로 진행한다.
+당시 우선순위였던 Queue·수집기 수명주기, 분봉 정합성, MA 실패 상태, 스크리너 외부 오류와 ATTACH는 수정 이력과 위 최종 검증을 따른다.

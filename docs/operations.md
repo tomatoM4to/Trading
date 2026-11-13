@@ -86,7 +86,7 @@ pytest 기반 백엔드 정합성 하네스는 다음 명령으로 실행한다.
 uv run --locked pytest
 ```
 
-Stage별 명령·실행 결과·실제 API 선택 검증 및 미검증 범위는 [testing.md](testing.md)를 따른다. 현재 Windows 기본 실행은 미해결 T12의 4개 사례 때문에 종료 코드 1이다. [test-defects.md](test-defects.md)의 수정 이력을 확인하고, 남은 실패를 skip하거나 기대값을 완화해 숨기지 않는다.
+Stage별 명령·실행 결과·실제 API 선택 검증 및 미검증 범위는 [testing.md](testing.md)를 따른다. 현재 Windows·Docker Linux 기본 실행은 각각 126개 통과, 종료 코드 0이다. [test-defects.md](test-defects.md)의 수정 이력을 확인하고, 새 실패를 skip하거나 기대값을 완화해 숨기지 않는다.
 
 ## 장애 점검 순서
 

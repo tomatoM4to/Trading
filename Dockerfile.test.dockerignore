@@ -1,0 +1,11 @@
+**
+!pyproject.toml
+!uv.lock
+!app/
+!app/**/*.py
+!tests/
+!tests/**/*.py
+!tests/fixtures/
+!tests/fixtures/*.json
+!scripts/
+!scripts/*.py
