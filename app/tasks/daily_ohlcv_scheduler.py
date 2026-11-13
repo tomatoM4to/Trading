@@ -263,7 +263,15 @@ async def process_ticker(
             conn.execute("DELETE FROM daily_collection_state WHERE ticker=?", (ticker,))
         conn.commit()
 
-        rebuild_daily_ma_for_ticker(conn, ma_conn, ticker)
+        from core.state import system_state
+
+        try:
+            rebuild_daily_ma_for_ticker(conn, ma_conn, ticker)
+        except Exception:
+            ma_conn.rollback()
+            system_state.set_ticker_ma_ready("daily", ticker, False)
+            raise
+        system_state.set_ticker_ma_ready("daily", ticker, True)
 
         return True
     except Exception as e:

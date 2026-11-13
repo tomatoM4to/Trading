@@ -7,6 +7,13 @@ from schemas.screener import FilterNode, ScreenerRequest
 class ScreenerEngine:
     VALID_MA_PERIODS = {"5", "10", "20", "60", "120", "200"}
 
+    def _require_ma_ready(self) -> None:
+        from core.state import system_state
+
+        ready, reason = system_state.ma_status
+        if not ready:
+            raise RuntimeError(reason)
+
     def _validate_ma_line(self, line: str) -> str:
         raw_line = str(line)
         if raw_line.startswith("ma_daily_"):
@@ -249,6 +256,7 @@ class ScreenerEngine:
                         else:
                             final_dict[ticker] = values
 
+            self._require_ma_ready()
             items = self.get_ticker_names(final_dict)
             yield f"data: {json.dumps({'type': 'complete', 'items': items})}\n\n"
         except Exception as e:
@@ -260,6 +268,7 @@ class ScreenerEngine:
         current_tickers: dict[str, dict[str, float]] | None = None,
     ) -> dict[str, dict[str, float]]:
         """단일 필터 모듈을 호출하여 딕셔너리를 반환합니다."""
+        self._require_ma_ready()
         handler = self.filter_handlers.get(filter_node.type)
         if not handler:
             raise ValueError(f"지원하지 않는 필터 타입입니다: {filter_node.type}")

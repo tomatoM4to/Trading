@@ -193,6 +193,14 @@ class Sandbox:
 
     def __enter__(self):
         database = self.database
+        from core.state import system_state
+
+        self.stack.enter_context(patch.object(system_state, "_ma_ready", False))
+        self.stack.enter_context(
+            patch.object(system_state, "_ma_reason", "이동평균 데이터 준비 중입니다.")
+        )
+        self.stack.enter_context(patch.object(system_state, "_ma_failures", set()))
+        self.stack.enter_context(patch.object(system_state, "_ma_failure_version", 0))
         self.start_connections = len(self.offline.connections)
         self.offline.memory_uris.add(self.ma_uri)
         self.stack.callback(self.offline.memory_uris.remove, self.ma_uri)

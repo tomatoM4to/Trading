@@ -6,6 +6,7 @@ import pandas as pd
 from core.database import MINUTE_MA_RETENTION, connect_ma_db, connect_sqlite
 from core.kis_fetch import async_kis_fetch
 from core.ma_calculator import MACalculator
+from core.state import system_state
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -193,152 +194,158 @@ async def process_ticker(
     success_any = False
     newest_dt: str | None = None
 
-    # 최대 max_steps 번 연속 조회
-    for _ in range(max_steps):
-        if target_date < cutoff_date:
-            break
-
-        df = await fetch_minute_data(
-            ticker, target_date, target_time, priority=priority
-        )
-        if df.empty:
-            # 엣지 케이스: 야간(예: 새벽 1시)이나 휴일 등 해당 일자에 데이터가 아예 없는 경우
-            # 루프를 종료하지 않고 전날 장 마감 시간(15:30)으로 셋팅하여 계속 탐색
-            try:
-                curr_date = datetime.strptime(target_date, "%Y%m%d")
-                prev_date = curr_date - timedelta(days=1)
-                target_date = prev_date.strftime("%Y%m%d")
-                target_time = "153000"
-                continue
-            except Exception as e:
-                logger.error(f"Failed to calculate previous date for {ticker}: {e}")
+    try:
+        # 최대 max_steps 번 연속 조회
+        for _ in range(max_steps):
+            if target_date < cutoff_date:
                 break
 
-        try:
-            records = normalize_minute_page(ticker, df)
-        except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(f"[{ticker}] Invalid minute OHLCV response") from exc
+            df = await fetch_minute_data(
+                ticker, target_date, target_time, priority=priority
+            )
+            if df.empty:
+                # 엣지 케이스: 야간(예: 새벽 1시)이나 휴일 등 해당 일자에 데이터가 아예 없는 경우
+                # 루프를 종료하지 않고 전날 장 마감 시간(15:30)으로 셋팅하여 계속 탐색
+                try:
+                    curr_date = datetime.strptime(target_date, "%Y%m%d")
+                    prev_date = curr_date - timedelta(days=1)
+                    target_date = prev_date.strftime("%Y%m%d")
+                    target_time = "153000"
+                    continue
+                except Exception as e:
+                    logger.error(f"Failed to calculate previous date for {ticker}: {e}")
+                    break
 
-        if newest_dt is None:
-            newest_dt = records[-1]["dt_str"]
-
-        fetched_min_dt = records[0]["dt_str"]
-        fetched_len = len(df)
-
-        # 중복 감지 조기 종료 (Overlap-Aware Early Exit)
-        is_overlap = False
-        if last_datetime:
-            if fetched_min_dt <= last_datetime:
-                is_overlap = True
-
-            records = [row for row in records if row["dt_str"] >= last_datetime]
-            if not records:
-                break
-
-        if records:
-            conn = connect_sqlite()
             try:
-                cursor = conn.cursor()
-                last = records[-1]
-                previous = cursor.execute(
-                    "SELECT cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time=?",
-                    (ticker, last["date"], last["time"]),
-                ).fetchone()
-                insert_sql = """
-                    INSERT INTO minute_ohlcv (
-                        ticker, date, time, open, high, low, close, volume, amount, cumulative_amount
-                    ) VALUES (
-                        :ticker, :date, :time, :open, :high, :low, :close, :volume, :amount, :cumulative_amount
-                    )
-                    ON CONFLICT(ticker, date, time) DO UPDATE SET
-                        amount = CASE
-                            WHEN excluded.amount IS NOT NULL THEN excluded.amount
-                            WHEN (minute_ohlcv.open, minute_ohlcv.high, minute_ohlcv.low,
-                                  minute_ohlcv.close, minute_ohlcv.volume) =
-                                 (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume)
-                                 AND (excluded.cumulative_amount IS NULL OR
-                                      excluded.cumulative_amount = minute_ohlcv.cumulative_amount)
-                            THEN minute_ohlcv.amount
-                            ELSE NULL END,
-                        cumulative_amount = CASE
-                            WHEN excluded.cumulative_amount IS NULL AND
-                                 (minute_ohlcv.open, minute_ohlcv.high, minute_ohlcv.low,
-                                  minute_ohlcv.close, minute_ohlcv.volume) =
-                                 (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume)
-                            THEN minute_ohlcv.cumulative_amount
-                            ELSE excluded.cumulative_amount END,
-                        open=excluded.open, high=excluded.high, low=excluded.low,
-                        close=excluded.close, volume=excluded.volume
-                """
-                cursor.executemany(insert_sql, records)
-                cumulative = cursor.execute(
-                    "SELECT cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time=?",
-                    (ticker, last["date"], last["time"]),
-                ).fetchone()[0]
-                if previous is not None and previous[0] != cumulative:
-                    successor = cursor.execute(
-                        "SELECT time, cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time>? ORDER BY time LIMIT 1",
+                records = normalize_minute_page(ticker, df)
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"[{ticker}] Invalid minute OHLCV response") from exc
+
+            if newest_dt is None:
+                newest_dt = records[-1]["dt_str"]
+
+            fetched_min_dt = records[0]["dt_str"]
+            fetched_len = len(df)
+
+            # 중복 감지 조기 종료 (Overlap-Aware Early Exit)
+            is_overlap = False
+            if last_datetime:
+                if fetched_min_dt <= last_datetime:
+                    is_overlap = True
+
+                records = [row for row in records if row["dt_str"] >= last_datetime]
+                if not records:
+                    break
+
+            if records:
+                conn = connect_sqlite()
+                try:
+                    cursor = conn.cursor()
+                    last = records[-1]
+                    previous = cursor.execute(
+                        "SELECT cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time=?",
                         (ticker, last["date"], last["time"]),
                     ).fetchone()
-                    if successor is not None:
-                        next_time = (
-                            datetime.strptime(last["dt_str"], "%Y%m%d%H%M%S")
-                            + timedelta(minutes=1)
-                        ).strftime("%H%M%S")
-                        amount = None
-                        if (
-                            int(next_time) == successor[0]
-                            and cumulative is not None
-                            and successor[1] is not None
-                        ):
-                            amount = successor[1] - cumulative
-                            if amount < 0:
-                                raise ValueError("Invalid cumulative minute amount")
-                        cursor.execute(
-                            "UPDATE minute_ohlcv SET amount=? WHERE ticker=? AND date=? AND time=?",
-                            (amount, ticker, last["date"], successor[0]),
+                    insert_sql = """
+                        INSERT INTO minute_ohlcv (
+                            ticker, date, time, open, high, low, close, volume, amount, cumulative_amount
+                        ) VALUES (
+                            :ticker, :date, :time, :open, :high, :low, :close, :volume, :amount, :cumulative_amount
                         )
-                conn.commit()
-                success_any = True
+                        ON CONFLICT(ticker, date, time) DO UPDATE SET
+                            amount = CASE
+                                WHEN excluded.amount IS NOT NULL THEN excluded.amount
+                                WHEN (minute_ohlcv.open, minute_ohlcv.high, minute_ohlcv.low,
+                                      minute_ohlcv.close, minute_ohlcv.volume) =
+                                     (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume)
+                                     AND (excluded.cumulative_amount IS NULL OR
+                                          excluded.cumulative_amount = minute_ohlcv.cumulative_amount)
+                                THEN minute_ohlcv.amount
+                                ELSE NULL END,
+                            cumulative_amount = CASE
+                                WHEN excluded.cumulative_amount IS NULL AND
+                                     (minute_ohlcv.open, minute_ohlcv.high, minute_ohlcv.low,
+                                      minute_ohlcv.close, minute_ohlcv.volume) =
+                                     (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume)
+                                THEN minute_ohlcv.cumulative_amount
+                                ELSE excluded.cumulative_amount END,
+                            open=excluded.open, high=excluded.high, low=excluded.low,
+                            close=excluded.close, volume=excluded.volume
+                    """
+                    cursor.executemany(insert_sql, records)
+                    cumulative = cursor.execute(
+                        "SELECT cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time=?",
+                        (ticker, last["date"], last["time"]),
+                    ).fetchone()[0]
+                    if previous is not None and previous[0] != cumulative:
+                        successor = cursor.execute(
+                            "SELECT time, cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time>? ORDER BY time LIMIT 1",
+                            (ticker, last["date"], last["time"]),
+                        ).fetchone()
+                        if successor is not None:
+                            next_time = (
+                                datetime.strptime(last["dt_str"], "%Y%m%d%H%M%S")
+                                + timedelta(minutes=1)
+                            ).strftime("%H%M%S")
+                            amount = None
+                            if (
+                                int(next_time) == successor[0]
+                                and cumulative is not None
+                                and successor[1] is not None
+                            ):
+                                amount = successor[1] - cumulative
+                                if amount < 0:
+                                    raise ValueError("Invalid cumulative minute amount")
+                            cursor.execute(
+                                "UPDATE minute_ohlcv SET amount=? WHERE ticker=? AND date=? AND time=?",
+                                (amount, ticker, last["date"], successor[0]),
+                            )
+                    conn.commit()
+                    success_any = True
+                except Exception as e:
+                    logger.error(f"[{ticker}] DB Insert Error: {e}")
+                    raise
+                finally:
+                    conn.close()
+
+            # 중복이 감지되었다면 과거 데이터를 더 뒤질 필요가 없으므로 즉시 탈출
+            if is_overlap:
+                break
+
+            # 다음 과거 페이지 조회 설정
+            # (주의: len(df)가 아니라 필터링 전 원본 길이인 fetched_len 기준)
+            if fetched_len >= 100:
+                target_date = fetched_min_dt[:8]
+                target_time = fetched_min_dt[8:]
+            else:
+                try:
+                    curr_date = datetime.strptime(target_date, "%Y%m%d")
+                    prev_date = curr_date - timedelta(days=1)
+                    target_date = prev_date.strftime("%Y%m%d")
+                    target_time = "153000"
+                except Exception as e:
+                    logger.error(f"Failed to calculate previous date for {ticker}: {e}")
+                    break
+
+        if success_any:
+            conn = connect_sqlite()
+            ma_conn = connect_ma_db()
+            try:
+                rebuild_minute_ma_for_ticker(conn, ma_conn, ticker)
+                system_state.set_ticker_ma_ready("minute", ticker, True)
             except Exception as e:
-                logger.error(f"[{ticker}] DB Insert Error: {e}")
+                ma_conn.rollback()
+                logger.error(f"[{ticker}] Minute MA rebuild error: {e}")
                 raise
             finally:
                 conn.close()
+                ma_conn.close()
 
-        # 중복이 감지되었다면 과거 데이터를 더 뒤질 필요가 없으므로 즉시 탈출
-        if is_overlap:
-            break
-
-        # 다음 과거 페이지 조회 설정
-        # (주의: len(df)가 아니라 필터링 전 원본 길이인 fetched_len 기준)
-        if fetched_len >= 100:
-            target_date = fetched_min_dt[:8]
-            target_time = fetched_min_dt[8:]
-        else:
-            try:
-                curr_date = datetime.strptime(target_date, "%Y%m%d")
-                prev_date = curr_date - timedelta(days=1)
-                target_date = prev_date.strftime("%Y%m%d")
-                target_time = "153000"
-            except Exception as e:
-                logger.error(f"Failed to calculate previous date for {ticker}: {e}")
-                break
-
-    if success_any:
-        conn = connect_sqlite()
-        ma_conn = connect_ma_db()
-        try:
-            rebuild_minute_ma_for_ticker(conn, ma_conn, ticker)
-        except Exception as e:
-            ma_conn.rollback()
-            logger.error(f"[{ticker}] Minute MA rebuild error: {e}")
-            raise
-        finally:
-            conn.close()
-            ma_conn.close()
-
-    return success_any, newest_dt
+        return success_any, newest_dt
+    except BaseException:
+        if success_any:
+            system_state.set_ticker_ma_ready("minute", ticker, False)
+        raise
 
 
 async def run_minute_ohlcv_scheduler(

@@ -16,6 +16,17 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def background_task_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        from core.state import system_state
+
+        system_state.set_ma_ready(False, "데이터 초기화에 실패했습니다.")
+        logger.error("Background initialization failed: %s", error)
+
+
 async def cancel_background_tasks(tasks: list[asyncio.Task]) -> None:
     """Cancel and await application-owned background tasks during shutdown."""
     active_tasks = [task for task in tasks if not task.done()]
@@ -36,6 +47,9 @@ async def lifespan(app: FastAPI):
     load_dotenv()
 
     logger.info("Application starting up...")
+    from core.state import system_state
+
+    system_state.set_ma_ready(False)
 
     # DB 연결성 확인 및 초기화
     try:
@@ -85,6 +99,9 @@ async def lifespan(app: FastAPI):
             "[Memory DB] Hydrating In-Memory MA Database from disk (SCHED=False)..."
         )
         background_tasks.append(asyncio.create_task(rebuild_ma_database()))
+
+    for task in background_tasks:
+        task.add_done_callback(background_task_done)
 
     yield  # Application runs here
 

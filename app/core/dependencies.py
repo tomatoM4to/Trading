@@ -38,3 +38,10 @@ async def system_state_guard(request: Request):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=reason,
         )
+
+    if request.url.path.startswith("/api/screener/"):
+        ready, reason = system_state.ma_status
+        if not ready:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=reason
+            )

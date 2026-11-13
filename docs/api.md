@@ -4,6 +4,8 @@
 
 FastAPI 앱은 모든 경로에 `system_state_guard`를 전역 dependency로 적용한다. 시스템이 무거운 데이터 작업 중이면 `/health`를 제외한 요청에 HTTP 503과 현재 작업 이유를 반환한다.
 
+MA 초기화 중·실패·종목별 미복구 상태는 `/api/screener/*`만 503으로 거부한다. 디스크 차트와 `/health`는 MA 준비 상태와 독립적이다. 이미 시작한 SSE에서 준비 실패를 발견하면 `error`로 끝낸다.
+
 CORS 허용 origin은 현재 다음 세 곳이다.
 
 - `http://localhost:3000`

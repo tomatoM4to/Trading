@@ -24,6 +24,10 @@ class SystemState:
         self._is_available = True
         self._reason = ""
         self._acquire_count = 0
+        self._ma_ready = False
+        self._ma_failures: set[tuple[str, str]] = set()
+        self._ma_failure_version = 0
+        self._ma_reason = "이동평균 데이터 준비 중입니다."
         self._initialized = True
 
     @property
@@ -31,6 +35,40 @@ class SystemState:
         """현재 시스템의 (가용여부, 거절사유) 반환"""
         with self._lock:
             return self._is_available, self._reason
+
+    @property
+    def ma_status(self) -> tuple[bool, str]:
+        with self._lock:
+            if self._ma_failures:
+                return False, "일부 종목의 이동평균 갱신에 실패했습니다."
+            return self._ma_ready, self._ma_reason
+
+    @property
+    def ma_failure_version(self) -> int:
+        with self._lock:
+            return self._ma_failure_version
+
+    def set_ma_ready(
+        self, ready: bool, reason: str = "", *, failure_version: int | None = None
+    ) -> None:
+        with self._lock:
+            self._ma_ready = ready
+            self._ma_reason = (
+                "" if ready else reason or "이동평균 데이터 준비 중입니다."
+            )
+            if ready and (
+                failure_version is None or failure_version == self._ma_failure_version
+            ):
+                self._ma_failures.clear()
+
+    def set_ticker_ma_ready(self, timeframe: str, ticker: str, ready: bool) -> None:
+        with self._lock:
+            key = (timeframe, ticker)
+            if ready:
+                self._ma_failures.discard(key)
+            else:
+                self._ma_failures.add(key)
+                self._ma_failure_version += 1
 
     @contextmanager
     def acquire(self, reason: str):
