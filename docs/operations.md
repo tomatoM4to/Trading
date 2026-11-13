@@ -49,10 +49,7 @@
 
 ### 통합 검증
 
-- `GET /admin/test/daily_scheduler`
-- `GET /admin/test/minute_scheduler`
-
-테스트 DB를 만들고 표본 종목에 대해 수집 파이프라인을 실행한다. 독립 자동 테스트 대체물이 아니며 KIS 호출과 로컬 파일 I/O를 발생시킨다.
+`/admin/test/*`는 MA DB 격리가 되지 않는 레거시 기능이라 삭제했다. [격리 pytest 및 Docker 검증](testing.md)을 사용한다. `/admin/live/*` 상태 조회와 `/admin/action/gc`는 유지한다.
 
 ## 운영 보안 경고
 
@@ -61,7 +58,6 @@
 - Nginx IP allowlist
 - 관리자 경로에 대한 Nginx 추가 인증
 - VPN 또는 private network
-- 운영 빌드에서 test router 제외
 - API 문서 비활성화 또는 인증
 
 보호가 구현되기 전에는 관리자 경로를 외부 사용자용 API로 취급하지 않는다.

@@ -499,3 +499,12 @@ def engine():
     from services.screener_service import ScreenerEngine
 
     return ScreenerEngine()
+
+
+def test_admin_test_routes_are_removed_but_live_routes_remain():
+    from main import app
+
+    paths = app.openapi()["paths"]
+    assert not any(path.startswith("/admin/test/") for path in paths)
+    assert "/admin/live/global-status" in paths
+    assert "/admin/live/ticker-status/{ticker}" in paths

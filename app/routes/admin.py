@@ -8,13 +8,8 @@ from services.admin_live_service import (
     get_global_status_service,
     get_ticker_status_service,
 )
-from services.admin_test_service import (
-    test_daily_scheduler_integration_service,
-    test_minute_scheduler_integration_service,
-)
 
 router = APIRouter(dependencies=[Depends(verify_admin_api_key)])
-test_router = APIRouter(prefix="/admin/test", tags=["Admin (Test)"])
 live_router = APIRouter(prefix="/admin/live", tags=["Admin (Live Status)"])
 action_router = APIRouter(prefix="/admin/action", tags=["Admin (Actions)"])
 
@@ -22,24 +17,6 @@ action_router = APIRouter(prefix="/admin/action", tags=["Admin (Actions)"])
 class DataTypeEnum(StrEnum):
     daily = "daily"
     minute = "minute"
-
-
-@test_router.get("/daily_scheduler")
-async def test_daily_scheduler_integration():
-    """
-    운영 DB를 보호하기 위해 test_trading.db를 임시 생성하고,
-    무작위 3종목에 대해 [콜드스타트 -> 갭필(복구) -> 데이터 무결성 검증]을 수행합니다.
-    """
-    return await test_daily_scheduler_integration_service()
-
-
-@test_router.get("/minute_scheduler")
-async def test_minute_scheduler_integration():
-    """
-    운영 DB를 보호하기 위해 test_trading.db를 임시 생성하고,
-    무작위 3종목에 대해 [분봉 콜드스타트 -> 갭필(복구) -> 데이터 무결성 검증]을 수행합니다.
-    """
-    return await test_minute_scheduler_integration_service()
 
 
 @live_router.get("/global-status")
@@ -73,6 +50,5 @@ async def trigger_garbage_collection():
     return {"message": "Garbage collection completed successfully."}
 
 
-router.include_router(test_router)
 router.include_router(live_router)
 router.include_router(action_router)

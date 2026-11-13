@@ -51,19 +51,14 @@ KIS API에서 삼성전자 최근 약 100일 일봉을 직접 조회하는 진�
 
 ## 관리자 API
 
-### 통합 검증
-
-- `GET /admin/test/daily_scheduler`
-- `GET /admin/test/minute_scheduler`
-
-ContextVar를 이용해 테스트 DB에 라우팅한 뒤 표본 종목의 수집·복구·무결성을 검증한다. GET 요청이지만 외부 KIS 호출과 파일 생성 등 부수 효과가 있다.
+기존 `/admin/test/daily_scheduler`, `/admin/test/minute_scheduler`는 삭제했다. 수집·복구 검증은 실제 KIS와 운영 MA를 건드리지 않는 [pytest 하네스](testing.md)로 대체했다. 저장소 내부 호출자·프론트엔드 사용처는 없으며 외부에서 이 관리자 경로를 호출하던 도구는 pytest 실행으로 전환해야 한다.
 
 ### 라이브 상태
 
 - `GET /admin/live/global-status?data_type=daily|minute`
 - `GET /admin/live/ticker-status/{ticker}?data_type=daily|minute`
 
-운영 메모리 DB의 적재 현황을 읽는다.
+운영 디스크 정본의 적재 현황을 읽는다.
 
 ### 운영 작업
 
