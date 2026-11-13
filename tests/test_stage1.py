@@ -128,6 +128,26 @@ def test_disk_attach_shares_ma_and_detach_preserves_keepalive(sandbox):
         ma.close()
 
 
+def test_existing_minute_schema_adds_nullable_source_without_changing_candles(sandbox):
+    row = ("A", 20261112, 90200, 113, 119, 111, 115, 3, 345)
+    sandbox.write("DROP TABLE minute_ohlcv")
+    sandbox.write(
+        "CREATE TABLE minute_ohlcv (ticker TEXT NOT NULL,date INTEGER NOT NULL,time INTEGER NOT NULL,open INTEGER NOT NULL,high INTEGER NOT NULL,low INTEGER NOT NULL,close INTEGER NOT NULL,volume INTEGER NOT NULL,amount INTEGER,PRIMARY KEY(ticker,date,time)) WITHOUT ROWID,STRICT"
+    )
+    sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", [row])
+    database._keepalive_ma_conn.close()
+    database.init_sqlite_connection()
+    conn = database.connect_sqlite()
+    try:
+        assert tuple(conn.execute("SELECT * FROM minute_ohlcv").fetchone()) == (
+            *row,
+            None,
+        )
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        conn.close()
+
+
 def test_guard_rejects_outside_db_and_attach(offline):
     count = len(offline.blocked)
     with pytest.raises(AssertionError):

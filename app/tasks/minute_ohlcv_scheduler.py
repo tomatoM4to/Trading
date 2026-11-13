@@ -48,7 +48,15 @@ def normalize_minute_page(ticker: str, frame: pd.DataFrame) -> list[dict]:
                 amount = cumulative
             if cumulative < 0 or (amount is not None and amount < 0):
                 raise ValueError("Invalid cumulative minute amount")
-        records.append({"ticker": ticker, **row, "amount": amount, "dt_str": timestamp})
+        records.append(
+            {
+                "ticker": ticker,
+                **row,
+                "amount": amount,
+                "cumulative_amount": cumulative,
+                "dt_str": timestamp,
+            }
+        )
         previous_date, previous_amount = row["date"], cumulative
     return records
 
@@ -228,20 +236,70 @@ async def process_ticker(
                 break
 
         if records:
-            success_any = True
-
             conn = connect_sqlite()
             try:
                 cursor = conn.cursor()
+                last = records[-1]
+                previous = cursor.execute(
+                    "SELECT cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time=?",
+                    (ticker, last["date"], last["time"]),
+                ).fetchone()
                 insert_sql = """
-                    INSERT OR REPLACE INTO minute_ohlcv (
-                        ticker, date, time, open, high, low, close, volume, amount
+                    INSERT INTO minute_ohlcv (
+                        ticker, date, time, open, high, low, close, volume, amount, cumulative_amount
                     ) VALUES (
-                        :ticker, :date, :time, :open, :high, :low, :close, :volume, :amount
+                        :ticker, :date, :time, :open, :high, :low, :close, :volume, :amount, :cumulative_amount
                     )
+                    ON CONFLICT(ticker, date, time) DO UPDATE SET
+                        amount = CASE
+                            WHEN excluded.amount IS NOT NULL THEN excluded.amount
+                            WHEN (minute_ohlcv.open, minute_ohlcv.high, minute_ohlcv.low,
+                                  minute_ohlcv.close, minute_ohlcv.volume) =
+                                 (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume)
+                                 AND (excluded.cumulative_amount IS NULL OR
+                                      excluded.cumulative_amount = minute_ohlcv.cumulative_amount)
+                            THEN minute_ohlcv.amount
+                            ELSE NULL END,
+                        cumulative_amount = CASE
+                            WHEN excluded.cumulative_amount IS NULL AND
+                                 (minute_ohlcv.open, minute_ohlcv.high, minute_ohlcv.low,
+                                  minute_ohlcv.close, minute_ohlcv.volume) =
+                                 (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume)
+                            THEN minute_ohlcv.cumulative_amount
+                            ELSE excluded.cumulative_amount END,
+                        open=excluded.open, high=excluded.high, low=excluded.low,
+                        close=excluded.close, volume=excluded.volume
                 """
                 cursor.executemany(insert_sql, records)
+                cumulative = cursor.execute(
+                    "SELECT cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time=?",
+                    (ticker, last["date"], last["time"]),
+                ).fetchone()[0]
+                if previous is not None and previous[0] != cumulative:
+                    successor = cursor.execute(
+                        "SELECT time, cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time>? ORDER BY time LIMIT 1",
+                        (ticker, last["date"], last["time"]),
+                    ).fetchone()
+                    if successor is not None:
+                        next_time = (
+                            datetime.strptime(last["dt_str"], "%Y%m%d%H%M%S")
+                            + timedelta(minutes=1)
+                        ).strftime("%H%M%S")
+                        amount = None
+                        if (
+                            int(next_time) == successor[0]
+                            and cumulative is not None
+                            and successor[1] is not None
+                        ):
+                            amount = successor[1] - cumulative
+                            if amount < 0:
+                                raise ValueError("Invalid cumulative minute amount")
+                        cursor.execute(
+                            "UPDATE minute_ohlcv SET amount=? WHERE ticker=? AND date=? AND time=?",
+                            (amount, ticker, last["date"], successor[0]),
+                        )
                 conn.commit()
+                success_any = True
             except Exception as e:
                 logger.error(f"[{ticker}] DB Insert Error: {e}")
                 raise

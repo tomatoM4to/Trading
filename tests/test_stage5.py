@@ -56,7 +56,10 @@ async def test_rebuild_after_memory_loss_reconstructs_every_retained_ma(sandbox)
 
     daily, minute = (daily_series(500), minute_series(850))
     sandbox.write("INSERT INTO daily_ohlcv VALUES (?,?,?,?,?,?,?,?)", daily)
-    sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", minute)
+    sandbox.write(
+        "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount) VALUES (?,?,?,?,?,?,?,?,?)",
+        minute,
+    )
     database._keepalive_ma_conn.close()
     database.init_sqlite_connection()
     await rebuild_ma_database()
@@ -227,7 +230,10 @@ async def test_bootstrap_minute_failure_rolls_back_both_ma_tables(sandbox):
 
     daily, minute = daily_series(10), minute_series(10)
     sandbox.write("INSERT INTO daily_ohlcv VALUES (?,?,?,?,?,?,?,?)", daily)
-    sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", minute)
+    sandbox.write(
+        "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount) VALUES (?,?,?,?,?,?,?,?,?)",
+        minute,
+    )
     await rebuild_ma_database()
     before_daily, before_minute = sandbox.rows("daily_ma"), sandbox.rows("minute_ma")
     sandbox.write("UPDATE daily_ohlcv SET close=close+10")
@@ -272,7 +278,10 @@ async def test_gc_preserves_latest_500_daily_and_two_minute_dates_per_ticker(san
         daily = daily_series(505, ticker, end_date=yesterday)
         minute = minute_series(1173, ticker)
         sandbox.write("INSERT INTO daily_ohlcv VALUES (?,?,?,?,?,?,?,?)", daily)
-        sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", minute)
+        sandbox.write(
+            "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount) VALUES (?,?,?,?,?,?,?,?,?)",
+            minute,
+        )
     with patch("core.scheduler.datetime", FrozenDateTime):
         await SystemScheduler().cleanup_ohlcv_job()
     expected_daily, expected_minute = ([], [])

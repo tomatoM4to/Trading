@@ -206,7 +206,10 @@ async def test_minute_latest_candle_revision_is_upserted(sandbox, candles):
     from tasks.minute_ohlcv_scheduler import process_ticker
 
     rows = candles["minute_expected"]
-    sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    sandbox.write(
+        "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount) VALUES (?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
     changed = copy.deepcopy(candles["minute"])
     changed[0]["stck_prpr"] = "121"
     changed[0]["cntg_vol"] = "5"
@@ -222,7 +225,7 @@ async def test_minute_increment_preserves_cumulative_baseline(sandbox, candles):
     from tasks.minute_ohlcv_scheduler import process_ticker
 
     sandbox.write(
-        "INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount) VALUES (?,?,?,?,?,?,?,?,?)",
         candles["minute_expected"][:1],
     )
     with FakeTransport([response(candles["minute"])]):
@@ -249,11 +252,74 @@ async def test_minute_amount_without_baseline_is_unknown(sandbox, candles, with_
     assert sandbox.rows("minute_ohlcv") == [tuple(row) for row in expected]
 
 
+@pytest.mark.parametrize(
+    "revision", ["unchanged", "close", "volume", "cumulative", "missing"]
+)
+async def test_minute_partial_recollection_does_not_blindly_preserve_or_erase_amount(
+    sandbox, candles, revision
+):
+    from tasks.minute_ohlcv_scheduler import process_ticker
+
+    with FakeTransport([response(candles["minute"])]):
+        await process_ticker("A", max_steps=1)
+    raw = copy.deepcopy(candles["minute"][:2])
+    expected = copy.deepcopy(candles["minute_expected"])
+    if revision == "close":
+        raw[-1]["stck_prpr"] = "122"
+        expected[2][6] = 122
+        expected[2][-1] = None
+    elif revision == "volume":
+        raw[-1]["cntg_vol"] = "7"
+        expected[2][7] = 7
+        expected[2][-1] = None
+    elif revision == "cumulative":
+        raw[-1]["acml_tr_pbmn"] = "666"
+        expected[2][-1] = None
+        expected[3][-1] -= 10
+    elif revision == "missing":
+        for row in raw:
+            del row["acml_tr_pbmn"]
+    for _ in range(2):
+        with FakeTransport([response(raw)]):
+            await process_ticker("A", last_datetime="20261112090200", max_steps=1)
+        assert sandbox.rows("minute_ohlcv") == [tuple(r) for r in expected]
+
+
+async def test_minute_cumulative_revision_invalidates_unfetched_successor(
+    sandbox, candles
+):
+    from tasks.minute_ohlcv_scheduler import process_ticker
+
+    with FakeTransport([response(candles["minute"])]):
+        await process_ticker("A", max_steps=1)
+    raw = copy.deepcopy(candles["minute"][1:2])
+    raw[0]["acml_tr_pbmn"] = "666"
+    expected = copy.deepcopy(candles["minute_expected"])
+    expected[2][-1] = None
+    expected[3][-1] -= 10
+    with FakeTransport([response(raw)]):
+        await process_ticker("A", max_steps=1)
+    assert sandbox.rows("minute_ohlcv") == [tuple(r) for r in expected]
+    conn = database.connect_sqlite()
+    try:
+        assert [
+            tuple(r)
+            for r in conn.execute(
+                "SELECT time, cumulative_amount FROM minute_ohlcv ORDER BY time"
+            )
+        ] == [(90000, 100), (90100, 311), (90200, 666), (90300, 1122)]
+    finally:
+        conn.close()
+
+
 async def test_minute_same_timestamp_revision_recomputes_ma(sandbox):
     from tasks.minute_ohlcv_scheduler import process_ticker
 
     rows = minute_series(10)
-    sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    sandbox.write(
+        "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount) VALUES (?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
     changed = list(rows[-1])
     changed[6] += 1
     changed[8] += changed[7]
@@ -316,7 +382,10 @@ async def test_minute_ma_retention_has_warmup_for_every_retained_row(sandbox):
     from tasks.minute_ohlcv_scheduler import rebuild_minute_ma_for_ticker
 
     rows = minute_series(850)
-    sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", rows[::-1])
+    sandbox.write(
+        "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount) VALUES (?,?,?,?,?,?,?,?,?)",
+        rows[::-1],
+    )
     conn, ma = (database.connect_sqlite(), database.connect_ma_db())
     try:
         rebuild_minute_ma_for_ticker(conn, ma, "A")

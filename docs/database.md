@@ -11,13 +11,13 @@
 | 디스크 DB | `data/trading.db` 또는 `SQLITE_DB_PATH` | 종목 마스터와 OHLCV 정본 |
 | MA 메모리 DB | `file:ma_db?mode=memory&cache=shared` | 사전 계산 이동평균 |
 
-MA 메모리 DB는 마지막 연결이 닫히면 사라진다. `_keepalive_ma_conn`은 프로세스 수명 동안 MA DB를 유지하므로 제거하면 안 된다. `test_mem_var`로 만든 테스트 DB는 테스트가 별도 keep-alive 연결을 소유한다.
+MA 메모리 DB는 마지막 연결이 닫히면 사라진다. `_keepalive_ma_conn`은 프로세스 수명 동안 MA DB를 유지한다. 테스트 메모리 DB는 테스트가 별도 keep-alive 연결을 소유한다.
 
 ## 시작과 동기화
 
 `init_sqlite_connection()`은 디스크 DB에 직접 연결해 WAL과 주 데이터 스키마를 보장하고, 별도로 MA Shared In-Memory DB와 keep-alive 연결을 생성한다. 이후 `connect_sqlite()`가 만드는 일반 연결은 계속 디스크 정본을 가리킨다.
 
-호환 이름인 `sync_memory_to_disk()`는 운영 경로에서 디스크 정본의 WAL을 체크포인트한다. 관리자 통합 테스트가 `mem_conn`을 명시적으로 전달한 경우에만 테스트 메모리 DB를 `test_db_var` 파일로 backup한다. 디스크 연결에는 WAL과 `synchronous=NORMAL`을 적용한다.
+`sync_memory_to_disk()`는 운영 경로에서 디스크 정본의 WAL을 체크포인트한다. 격리 테스트가 `mem_conn`을 명시적으로 전달한 경우에만 테스트 메모리 DB를 `test_db_var` 파일로 backup한다. 디스크 연결에는 WAL과 `synchronous=NORMAL`을 적용한다.
 백업 실패는 로그를 남긴 뒤 호출자에게 예외를 다시 전달하므로 스케줄러와 관리자 작업이 성공으로 오인하지 않는다.
 
 ## 주 테이블
@@ -32,9 +32,11 @@ MA 메모리 DB는 마지막 연결이 닫히면 사라진다. `_keepalive_ma_co
 
 ### `minute_ohlcv`
 
-복합 기본 키 `(ticker, date, time)`을 사용한다. `date`는 `YYYYMMDD`, `time`은 `HHMMSS` 형태의 `INTEGER`다. `amount`는 nullable이다.
+복합 기본 키 `(ticker, date, time)`을 사용한다. `date`는 `YYYYMMDD`, `time`은 `HHMMSS` 형태의 `INTEGER`다. `amount`와 원본 누적대금 `cumulative_amount`는 nullable이다. 기존 DB에는 시작 시 nullable 열만 추가하며 이전 행의 대금을 변경하지 않는다.
 
 누적 거래대금의 이전 기준값을 확인할 수 없는 페이지 경계에서는 `amount=NULL`을 사용한다. 원본으로 확인할 수 없는 값을 종가×거래량이나 0으로 대체하지 않는다.
+
+부분 재수집의 대금 보존·무효화와 후속 캔들 보정은 [분봉 수집](scheduler.md#분봉-수집)을 따른다. 마이그레이션 전 행은 원본 누적값이 없으므로 동일 원본인지 확인할 수 없다. 이런 경계 행은 NULL로 무효화할 수 있으며 기준 행이 포함된 재수집으로 복원한다.
 
 모든 주 테이블은 `WITHOUT ROWID, STRICT`다.
 

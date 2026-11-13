@@ -58,7 +58,12 @@ async def measure(box, tickers, repeats):
                 if minute
                 else ("daily_ohlcv", "?,?,?,?,?,?,?,?")
             )
-            box.write(f"INSERT INTO {table} VALUES ({slots})", ordered)
+            columns = (
+                "ticker,date,time,open,high,low,close,volume,amount"
+                if minute
+                else "ticker,date,open,high,low,close,volume,amount"
+            )
+            box.write(f"INSERT INTO {table} ({columns}) VALUES ({slots})", ordered)
             processed += len(ordered)
             if minute and i % 2 == 0:
                 values = ma_reference(ordered, minute=True)[-1]

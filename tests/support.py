@@ -234,10 +234,15 @@ class Sandbox:
             else self.database.connect_sqlite()
         )
         try:
+            columns = (
+                "ticker,date,time,open,high,low,close,volume,amount"
+                if table == "minute_ohlcv"
+                else "*"
+            )
             return [
                 tuple(r)
                 for r in conn.execute(
-                    f"SELECT * FROM {table} ORDER BY 1, 2"
+                    f"SELECT {columns} FROM {table} ORDER BY 1, 2"
                     + (", 3" if table.startswith("minute") else "")
                 )
             ]

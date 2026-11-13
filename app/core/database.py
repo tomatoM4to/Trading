@@ -126,9 +126,18 @@ def init_sqlite_connection() -> None:
             close INTEGER NOT NULL,
             volume INTEGER NOT NULL,
             amount INTEGER,
+            cumulative_amount INTEGER,
             PRIMARY KEY (ticker, date, time)
         ) WITHOUT ROWID, STRICT
         """)
+
+        minute_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(minute_ohlcv)")
+        }
+        if "cumulative_amount" not in minute_columns:
+            conn.execute(
+                "ALTER TABLE minute_ohlcv ADD COLUMN cumulative_amount INTEGER"
+            )
 
         conn.commit()
     finally:

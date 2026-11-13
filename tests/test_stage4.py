@@ -18,6 +18,15 @@ def decode_events(text):
 pytestmark = pytest.mark.stage4
 
 
+def test_admin_test_routes_are_removed_but_live_routes_remain():
+    from main import app
+
+    paths = app.openapi()["paths"]
+    assert not any(path.startswith("/admin/test/") for path in paths)
+    assert "/admin/live/global-status" in paths
+    assert "/admin/live/ticker-status/{ticker}" in paths
+
+
 @pytest.fixture(autouse=True)
 async def market_data(sandbox):
     from core.bootstrap import rebuild_ma_database
@@ -70,7 +79,14 @@ async def market_data(sandbox):
                 if minute
                 else ("daily_ohlcv", "?,?,?,?,?,?,?,?")
             )
-            sandbox.write(f"INSERT INTO {table} VALUES ({placeholders})", changed)
+            columns = (
+                "ticker,date,time,open,high,low,close,volume,amount"
+                if minute
+                else "ticker,date,open,high,low,close,volume,amount"
+            )
+            sandbox.write(
+                f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", changed
+            )
     await rebuild_ma_database()
     return market_data
 
@@ -499,12 +515,3 @@ def engine():
     from services.screener_service import ScreenerEngine
 
     return ScreenerEngine()
-
-
-def test_admin_test_routes_are_removed_but_live_routes_remain():
-    from main import app
-
-    paths = app.openapi()["paths"]
-    assert not any(path.startswith("/admin/test/") for path in paths)
-    assert "/admin/live/global-status" in paths
-    assert "/admin/live/ticker-status/{ticker}" in paths
