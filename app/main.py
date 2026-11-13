@@ -51,17 +51,6 @@ async def lifespan(app: FastAPI):
 
     system_state.set_ma_ready(False)
 
-    # DB 연결성 확인 및 초기화
-    try:
-        init_sqlite_connection()
-        logger.info("Database connection validated")
-    except Exception as e:
-        logger.error("Failed to connect to the database: %s", e)
-        raise e
-
-    # KIS API Rate Limit 제어 워커 백그라운드 구동 (모든 통신에 필수)
-    await start_q_worker()
-
     is_debug = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
     is_sched = os.getenv("SCHED", "False").lower() in ("true", "1", "t")
 
@@ -75,42 +64,53 @@ async def lifespan(app: FastAPI):
         logger.info("DEBUG mode is OFF: Forcing new auth token issuance (force=True)")
         await asyncio.to_thread(auth, force=True)
 
+    # DB 연결성 확인 및 초기화
+    try:
+        init_sqlite_connection()
+        logger.info("Database connection validated")
+    except Exception as e:
+        logger.error("Failed to connect to the database: %s", e)
+        raise e
+
     system_scheduler = None
     background_tasks: list[asyncio.Task] = []
+    try:
+        # KIS API Rate Limit 제어 워커 백그라운드 구동 (모든 통신에 필수)
+        await start_q_worker()
 
-    # 2. 백그라운드 스케줄러 & 부트스트랩 제어
-    if is_sched:
-        logger.sched(
-            "SCHED mode is ON: Starting system scheduler and bootstrap pipeline..."
-        )
-        system_scheduler = SystemScheduler()
-        system_scheduler.start()
+        # 2. 백그라운드 스케줄러 & 부트스트랩 제어
+        if is_sched:
+            logger.sched(
+                "SCHED mode is ON: Starting system scheduler and bootstrap pipeline..."
+            )
+            system_scheduler = SystemScheduler()
+            system_scheduler.start()
 
-        # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
-        background_tasks.append(asyncio.create_task(run_bootstrap_pipeline()))
-    else:
-        logger.sched(
-            "SCHED mode is OFF: Skipping background scheduler and bootstrap tasks."
-        )
-        # SCHED가 꺼져 있어도 스크리너를 위해 MA 인메모리 DB는 수화(Hydration)시켜야 함
-        from core.bootstrap import rebuild_ma_database
+            # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
+            background_tasks.append(asyncio.create_task(run_bootstrap_pipeline()))
+        else:
+            logger.sched(
+                "SCHED mode is OFF: Skipping background scheduler and bootstrap tasks."
+            )
+            # SCHED가 꺼져 있어도 스크리너를 위해 MA 인메모리 DB는 수화(Hydration)시켜야 함
+            from core.bootstrap import rebuild_ma_database
 
-        logger.info(
-            "[Memory DB] Hydrating In-Memory MA Database from disk (SCHED=False)..."
-        )
-        background_tasks.append(asyncio.create_task(rebuild_ma_database()))
+            logger.info(
+                "[Memory DB] Hydrating In-Memory MA Database from disk (SCHED=False)..."
+            )
+            background_tasks.append(asyncio.create_task(rebuild_ma_database()))
 
-    for task in background_tasks:
-        task.add_done_callback(background_task_done)
+        for task in background_tasks:
+            task.add_done_callback(background_task_done)
 
-    yield  # Application runs here
-
-    # Shutdown code
-    logger.info("Application shutting down...")
-    if system_scheduler:
-        system_scheduler.stop()
-    await cancel_background_tasks(background_tasks)
-    await stop_q_worker()
+        yield  # Application runs here
+    finally:
+        # Shutdown code
+        logger.info("Application shutting down...")
+        if system_scheduler:
+            system_scheduler.stop()
+        await cancel_background_tasks(background_tasks)
+        await stop_q_worker()
 
 
 app = FastAPI(

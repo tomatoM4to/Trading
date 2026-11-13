@@ -216,6 +216,7 @@ class Sandbox:
             )
         )
         self.stack.enter_context(patch.dict(self.offline.auth._base_headers))
+        self.stack.enter_context(patch.object(self.offline.auth, "_token_expiry", None))
         self.db_token = database.test_db_var.set(str(self.disk))
         self.stack.callback(database.test_db_var.reset, self.db_token)
         self.mem_token = database.test_mem_var.set(None)

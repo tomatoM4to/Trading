@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -232,8 +233,9 @@ def test_auth_failure_and_cache_expiration_use_real_auth_boundary(sandbox):
         patch.object(kis_auth, "_kis_env", None),
         FakeTransport([response(status=401)]) as transport,
     ):
-        kis_auth.auth(force=False)
-        assert kis_auth.get_kis_env() is None
+        with pytest.raises(RuntimeError):
+            kis_auth.auth(force=False)
+        assert kis_auth._kis_env is None
         assert transport.calls[0].timeout == 30
     good = response()
     good._content = json.dumps(
@@ -244,6 +246,7 @@ def test_auth_failure_and_cache_expiration_use_real_auth_boundary(sandbox):
     ).encode()
     with (
         patch.object(kis_auth, "config_root", root),
+        patch.object(kis_auth, "_kis_env", None),
         patch.dict(kis_auth._base_headers),
         FakeTransport([good]) as transport,
     ):
@@ -251,3 +254,126 @@ def test_auth_failure_and_cache_expiration_use_real_auth_boundary(sandbox):
         kis_auth.auth(force=False)
         assert len(transport.calls) == 1
         assert transport.calls[0].timeout == 30
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "http",
+        "timeout",
+        "json",
+        "missing-token",
+        "empty-token",
+        "missing-expiry",
+        "invalid-expiry",
+        "expired",
+    ],
+)
+def test_auth_rejects_invalid_issuance_without_publishing_or_logging_secrets(
+    sandbox, failure
+):
+    from core import kis_auth
+
+    secret = "fixture-sensitive-value"
+    payload = {
+        "access_token": secret,
+        "access_token_token_expired": "2099-01-01 00:00:00",
+    }
+    reply = response(status=401 if failure == "http" else 200)
+    if failure == "missing-token":
+        payload.pop("access_token")
+    elif failure == "empty-token":
+        payload["access_token"] = ""
+    elif failure == "missing-expiry":
+        payload.pop("access_token_token_expired")
+    elif failure == "invalid-expiry":
+        payload["access_token_token_expired"] = secret
+    elif failure == "expired":
+        payload["access_token_token_expired"] = "2000-01-01 00:00:00"
+    reply._content = (
+        b"invalid-json" if failure == "json" else json.dumps(payload).encode()
+    )
+    if failure == "timeout":
+        reply = requests.Timeout(secret)
+    with (
+        patch.object(kis_auth, "config_root", sandbox.path / "tokens"),
+        patch.object(kis_auth, "_kis_env", None),
+        patch.object(kis_auth.logger, "error") as log,
+        FakeTransport([reply]) as transport,
+    ):
+        with pytest.raises(RuntimeError) as caught:
+            kis_auth.auth(force=True)
+        assert kis_auth._kis_env is None
+        assert not (sandbox.path / "tokens").exists()
+        assert transport.calls[0].timeout == 30
+        assert secret not in str(caught.value)
+        assert secret not in str(log.call_args_list)
+
+
+async def test_refresh_failure_preserves_valid_token_and_rejects_it_after_expiry(
+    sandbox,
+):
+    from core import kis_auth
+    from core.scheduler import SystemScheduler
+
+    root = sandbox.path / "tokens"
+    root.mkdir()
+    expires = datetime.today() + timedelta(hours=1)
+    cache = root / f"KIS{datetime.today():%Y%m%d}"
+    contents = f"token: fixture-valid\nvalid-date: '{expires:%Y-%m-%d %H:%M:%S}'\n"
+    cache.write_text(contents, encoding="utf-8")
+
+    class AfterExpiry(datetime):
+        @classmethod
+        def today(cls):
+            return expires + timedelta(seconds=1)
+
+    with (
+        patch.object(kis_auth, "config_root", root),
+        FakeTransport([]) as transport,
+    ):
+        kis_auth.auth(force=False)
+        original = kis_auth.get_kis_env()
+        headers = kis_auth.get_base_header()
+        assert original.my_token == "fixture-valid"
+        assert transport.calls == []
+        with (
+            FakeTransport([response(status=503)]),
+            patch("core.scheduler.logger") as log,
+        ):
+            with pytest.raises(RuntimeError):
+                await SystemScheduler().refresh_auth_job(force=True)
+            log.error.assert_called_once()
+            log.sched.assert_not_called()
+        assert kis_auth.get_kis_env() == original
+        assert kis_auth.get_base_header() == headers
+        assert cache.read_text(encoding="utf-8") == contents
+        with (
+            patch.object(kis_auth, "datetime", AfterExpiry),
+            FakeTransport([]) as expired,
+        ):
+            with pytest.raises(RuntimeError):
+                await submit("expired-token")
+            assert expired.calls == []
+
+
+async def test_refresh_success_is_reported_only_after_authentication(sandbox):
+    from core import kis_auth
+    from core.scheduler import SystemScheduler
+
+    good = response()
+    good._content = json.dumps(
+        {
+            "access_token": "fixture-new",
+            "access_token_token_expired": "2099-01-01 00:00:00",
+        }
+    ).encode()
+    with (
+        patch.object(kis_auth, "config_root", sandbox.path / "tokens"),
+        FakeTransport([good]),
+        patch("core.scheduler.logger") as log,
+    ):
+        await SystemScheduler().refresh_auth_job(force=True)
+        assert kis_auth.get_kis_env().my_token == "fixture-new"
+        log.sched.assert_called_once()
+        log.error.assert_not_called()

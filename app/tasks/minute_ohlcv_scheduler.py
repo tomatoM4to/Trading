@@ -89,7 +89,7 @@ def get_minute_last_times(markets: list[str] | None = None) -> dict[str, str]:
         return last_times
     except Exception as e:
         logger.error(f"Failed to fetch last times from DB: {e}")
-        return {}
+        raise
     finally:
         conn.close()
 
@@ -375,7 +375,7 @@ async def run_minute_ohlcv_scheduler(
         tickers = [row["ticker"] for row in cursor.fetchall()]
     except Exception as e:
         logger.error(f"Failed to fetch tickers: {e}")
-        return
+        raise
     finally:
         conn.close()
 
@@ -436,6 +436,8 @@ async def run_minute_ohlcv_scheduler(
         logger.sched(
             f"[SCHED] Cycle Finished. Success: {success_count}, Fail: {fail_count}."
         )
+        if fail_count:
+            raise RuntimeError(f"Minute collection failed for {fail_count} tickers")
 
         if single_cycle:
             logger.sched("Single cycle finished. Exiting minute scheduler (test mode).")

@@ -183,6 +183,7 @@ async def run_bootstrap_pipeline():
             stock_count = 0
     except Exception as e:
         logger.error(f"Failed to check stock_codes: {e}")
+        raise
     finally:
         conn.close()
 
@@ -214,6 +215,7 @@ async def run_bootstrap_pipeline():
             ohlcv_count = cursor.fetchone()[0]
         except Exception as e:
             logger.error(f"Failed to check daily_ohlcv for {market}: {e}")
+            raise
         finally:
             conn.close()
 

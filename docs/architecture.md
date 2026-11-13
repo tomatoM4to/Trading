@@ -47,9 +47,9 @@ Next.js 대시보드
 `app/main.py`의 lifespan은 다음 순서를 따른다.
 
 1. `.env`를 로드하고 로깅을 초기화한다.
-2. 디스크 DB에 직접 연결해 WAL을 적용하고 주 데이터 스키마를 보장한 뒤 MA Shared In-Memory DB를 준비한다.
-3. KIS 전역 요청 워커를 시작한다.
-4. `DEBUG` 값에 따라 토큰을 재발급하거나 캐시를 재사용한다.
+2. `DEBUG` 값에 따라 토큰을 재발급하거나 유효한 캐시를 재사용한다. 인증 실패 시 DB·Queue를 만들기 전에 시작을 중단한다.
+3. 디스크 DB에 직접 연결해 WAL을 적용하고 주 데이터 스키마를 보장한 뒤 MA Shared In-Memory DB를 준비한다.
+4. KIS 전역 요청 워커를 시작한다.
 5. `SCHED=True`면 `SystemScheduler`와 부트스트랩 파이프라인을 시작한다.
 6. `SCHED=False`면 기존 OHLCV로 MA 메모리 DB만 재구축한다.
 
@@ -68,6 +68,8 @@ Next.js 대시보드
 1. 스케줄러가 시작돼 있었다면 새 작업 등록을 중단한다.
 2. lifespan이 소유한 부트스트랩 또는 MA 재구축 태스크를 취소하고 종료를 기다린다.
 3. KIS 요청 워커를 취소하고 종료를 기다린다.
+
+Queue 생성 이후의 시작 실패와 serving 중 예외도 lifespan의 `finally`에서 같은 종료 경로를 따른다. 인증 실패·Queue 생성 이후 시작 실패는 [Stage 5](testing.md#인증-db-실패-전파-검증)에서 검증한다.
 
 ## 시스템 상태 가드
 

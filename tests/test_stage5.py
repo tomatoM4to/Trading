@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -13,6 +14,231 @@ from tests.support import ROOT, FrozenDateTime, load_fixture
 from tests.transport import FakeTransport, response
 
 pytestmark = pytest.mark.stage5
+
+
+@pytest.mark.parametrize("debug", ["True", "False"])
+@pytest.mark.parametrize("sched", ["True", "False"])
+async def test_initial_auth_failure_aborts_lifespan_and_cleans_queue(
+    sandbox, debug, sched
+):
+    import os
+
+    from core import kis_auth, kis_fetch
+    from main import app, lifespan
+
+    baseline = asyncio.all_tasks()
+    with (
+        patch.dict(os.environ, {"DEBUG": debug, "SCHED": sched}),
+        patch("main.init_sqlite_connection") as init_db,
+        patch.object(kis_auth, "config_root", sandbox.path / "tokens"),
+        patch.object(kis_auth, "_kis_env", None),
+        patch("main.SystemScheduler.start") as scheduler,
+        patch("core.bootstrap.run_bootstrap_pipeline") as bootstrap,
+        patch("core.bootstrap.rebuild_ma_database") as rebuild,
+        FakeTransport([response(status=401)]),
+    ):
+        with pytest.raises(RuntimeError):
+            async with lifespan(app):
+                pytest.fail("Unauthenticated application reached serving state")
+        assert kis_fetch._kis_worker_task is None
+        assert kis_fetch._kis_queue is None
+        assert asyncio.all_tasks() == baseline
+        init_db.assert_not_called()
+        scheduler.assert_not_called()
+        bootstrap.assert_not_called()
+        rebuild.assert_not_called()
+
+
+async def test_start_failure_after_queue_creation_stops_owned_worker(sandbox):
+    import os
+
+    from core import kis_fetch
+    from main import app, lifespan
+
+    baseline = asyncio.all_tasks()
+    with (
+        patch.dict(os.environ, {"SCHED": "True"}),
+        patch("main.init_sqlite_connection"),
+        patch("core.kis_auth.auth"),
+        patch(
+            "main.SystemScheduler.start", side_effect=RuntimeError("scheduler failed")
+        ),
+        patch("main.SystemScheduler.stop") as stop,
+    ):
+        with pytest.raises(RuntimeError, match="scheduler failed"):
+            async with lifespan(app):
+                pytest.fail("Failed startup reached serving state")
+        assert kis_fetch._kis_worker_task is None
+        assert kis_fetch._kis_queue is None
+        assert asyncio.all_tasks() == baseline
+        stop.assert_called_once()
+
+
+@contextmanager
+def deny_sqlite_read(module, table, column=None):
+    connect = module.connect_sqlite
+    denied = []
+
+    def connect_with_failure():
+        conn = connect()
+
+        def authorize(action, name, field, db, trigger):
+            if action == sqlite3.SQLITE_READ and name == table:
+                if column is None or field == column:
+                    denied.append((name, field))
+                    return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        conn.set_authorizer(authorize)
+        return conn
+
+    with patch.object(module, "connect_sqlite", connect_with_failure):
+        yield denied
+
+
+def test_minute_last_times_distinguishes_empty_and_existing_data(sandbox):
+    from tasks.minute_ohlcv_scheduler import get_minute_last_times
+
+    assert get_minute_last_times() == {}
+    sandbox.stock()
+    rows = minute_series(400)
+    sandbox.write(
+        "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount) VALUES (?,?,?,?,?,?,?,?,?)",
+        list(reversed(rows)),
+    )
+    assert get_minute_last_times(["KOSPI"]) == {"A": "20261110090800"}
+    assert get_minute_last_times(["KOSDAQ"]) == {}
+
+
+@pytest.mark.parametrize(
+    ("mode", "table", "column"),
+    [
+        ("daily", "stock_codes", "ticker"),
+        ("daily", "daily_ohlcv", "date"),
+        ("minute", "minute_ohlcv", "date"),
+        ("minute", "stock_codes", "is_halted"),
+    ],
+)
+async def test_collector_initial_select_failure_reaches_scheduler_without_kis_calls(
+    sandbox, mode, table, column
+):
+    from core.scheduler import SystemScheduler
+    from core.state import system_state
+
+    from tasks import daily_ohlcv_scheduler as daily
+    from tasks import minute_ohlcv_scheduler as minute
+
+    sandbox.stock()
+    module = daily if mode == "daily" else minute
+    job = (
+        SystemScheduler().run_daily_ohlcv_job
+        if mode == "daily"
+        else SystemScheduler().start_minute_scheduler_job
+    )
+    with (
+        deny_sqlite_read(module, table, column) as denied,
+        FakeTransport([]) as transport,
+        patch("core.scheduler.logger") as log,
+        patch("core.database.sync_memory_to_disk") as checkpoint,
+    ):
+        with pytest.raises(sqlite3.DatabaseError):
+            await asyncio.wait_for(job(), 2)
+        assert denied
+        assert transport.calls == []
+        log.error.assert_called_once()
+        assert not any(
+            "completed" in str(c) or "finished naturally" in str(c)
+            for c in log.sched.call_args_list
+        )
+        checkpoint.assert_not_called()
+    assert system_state.status == (True, "")
+
+
+async def test_minute_last_times_select_failure_is_not_empty(sandbox):
+    from tasks import minute_ohlcv_scheduler as minute
+
+    with deny_sqlite_read(minute, "minute_ohlcv", "date") as denied:
+        with pytest.raises(sqlite3.DatabaseError):
+            minute.get_minute_last_times()
+        assert denied
+
+
+@pytest.mark.parametrize("mode", ["daily", "minute"])
+async def test_empty_market_is_successful_without_kis_calls(sandbox, mode):
+    from tasks.daily_ohlcv_scheduler import run_daily_ohlcv_scheduler
+    from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
+
+    with FakeTransport([]) as transport:
+        if mode == "daily":
+            await run_daily_ohlcv_scheduler()
+        else:
+            await run_minute_ohlcv_scheduler(single_cycle=True)
+        assert transport.calls == []
+
+
+@pytest.mark.parametrize("table", ["sqlite_master", "stock_codes", "daily_ohlcv"])
+async def test_bootstrap_presence_select_failure_stops_all_later_work(sandbox, table):
+    from core import bootstrap
+
+    sandbox.stock()
+    with (
+        deny_sqlite_read(bootstrap, table) as denied,
+        FakeTransport([]) as transport,
+        patch.object(bootstrap, "init_stock_codes_db") as master,
+        patch.object(bootstrap, "run_daily_ohlcv_scheduler") as daily,
+        patch.object(bootstrap, "rebuild_ma_database") as rebuild,
+        patch("tasks.minute_ohlcv_scheduler.start_minute_scheduler_task") as minute,
+    ):
+        with pytest.raises(sqlite3.DatabaseError):
+            await bootstrap.run_bootstrap_pipeline()
+        assert denied
+        assert transport.calls == []
+        master.assert_not_called()
+        daily.assert_not_called()
+        rebuild.assert_not_called()
+        minute.assert_not_called()
+
+
+async def test_bootstrap_empty_database_follows_normal_initialization(sandbox):
+    from core import bootstrap
+
+    with (
+        patch.object(
+            bootstrap, "init_stock_codes_db", side_effect=sandbox.stock
+        ) as master,
+        patch.object(bootstrap, "run_daily_ohlcv_scheduler") as daily,
+        patch("tasks.minute_ohlcv_scheduler.start_minute_scheduler_task") as minute,
+        FakeTransport([]) as transport,
+    ):
+        await bootstrap.run_bootstrap_pipeline()
+        master.assert_called_once()
+        assert [c.args for c in daily.call_args_list] == [("KOSPI",), ("KOSDAQ",)]
+        assert all(c.kwargs == {"verify_history": True} for c in daily.call_args_list)
+        minute.assert_awaited_once()
+        assert transport.calls == []
+
+
+async def test_minute_collector_reports_exhausted_db_retries(sandbox):
+    from tasks import minute_ohlcv_scheduler as minute
+
+    sandbox.stock()
+    attempts = []
+    rows = load_fixture("candles.json")["minute"]
+
+    async def fetch(*args, **kwargs):
+        import pandas as pd
+
+        if not attempts:
+            sandbox.write("DROP TABLE minute_ohlcv")
+        attempts.append(args)
+        return pd.DataFrame(rows)
+
+    with patch.object(minute, "fetch_minute_data", fetch):
+        with pytest.raises(
+            RuntimeError, match="Minute collection failed for 1 tickers"
+        ):
+            await minute.run_minute_ohlcv_scheduler(single_cycle=True)
+    assert len(attempts) == 4
 
 
 @pytest.mark.parametrize("mode", ("daily", "minute"))

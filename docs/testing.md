@@ -2,7 +2,7 @@
 
 ## Overview
 
-하네스의 최초 목표는 운영 코드 변경 없이 기존 구현의 결함을 검출하는 것이었다. 이전 테스트 기대값을 이식하지 않았으며 실제 스키마·수집기·Queue·SQL 필터·라우터를 실행한다. 이후 결함 수정 시에도 `xfail`, skip 또는 완화한 기대값으로 실패를 숨기지 않는다. 수정 현황은 [결함 보고서](test-defects.md#수정-이력)를 따른다. 현재 기본 명령은 **126개 통과, 종료 코드 0**이다.
+하네스의 최초 목표는 운영 코드 변경 없이 기존 구현의 결함을 검출하는 것이었다. 이전 테스트 기대값을 이식하지 않았으며 실제 스키마·수집기·Queue·SQL 필터·라우터를 실행한다. 이후 결함 수정 시에도 `xfail`, skip 또는 완화한 기대값으로 실패를 숨기지 않는다. 수정 현황은 [결함 보고서](test-defects.md#수정-이력)를 따른다. 현재 기본 명령은 **154개 통과, 종료 코드 0**이다.
 
 계획은 자산 조사 → 격리/계산 → 수집 → Queue → API/집계 → 복구/자원 측정 → 독립 검토 순으로 실행했다. 각 Stage는 이전 Stage의 통과를 요구하지 않는다.
 
@@ -23,7 +23,7 @@
 ### 추적한 데이터 흐름
 
 ```text
-main.lifespan → DB/MA 초기화 → Queue 시작 → 인증 → scheduler/bootstrap
+main.lifespan → 인증 → DB/MA 초기화 → Queue 시작 → scheduler/bootstrap
 daily/minute process_ticker → 요청 파라미터
   → async_kis_fetch → 전역 PriorityQueue(priority,counter)
   → 단일 consumer → to_thread(_do_fetch) → requests.get/post
@@ -115,6 +115,38 @@ npx tsc --noEmit
 변경 전 이미지 `trading-test:baseline`은 `6c6b4d5` 소스와 같은 테스트 Dockerfile로 만들었다. 비교 측정 스크립트만 읽기 전용 mount로 추가해 동일 Fixture·제한에서 실행했다.
 
 ## 실행 결과와 한계
+
+### 인증 DB 실패 전파 검증
+
+2026-11-13, `git fetch origin dev`로 `d248133` 일치와 깨끗한 작업 트리를 확인한 뒤 `fix/auth-db-error-propagation`에서 수정했다. Python 3.12.12, 기존 Stage 1–5 하네스와 `Dockerfile.test`를 사용했다.
+
+| Stage | Windows 통과/실행 | Linux 통과/실행 |
+|---|---:|---:|
+| 1 | 10/10 | 10/10 |
+| 2 | 33/33 | 33/33 |
+| 3 | 19/19 | 19/19 |
+| 4 | 52/52 | 52/52 |
+| 5 | 40/40 | 40/40 |
+| 합계 | 154/154 | 154/154 |
+
+실패·오류·스킵 0, 기존 AnyIO·TestClient 경고 2개는 유지했다. Windows 전체는 46.45초·peak RSS 118.3MiB, Linux는 30.12초·123.7MiB였다. RSS는 Python 프로세스 누적 최고치이며 cgroup 전체 메모리가 아니다. 전체 `uv run --locked ruff check .`, `uv run --locked ruff format --check .`도 통과했다. Windows uv 캐시만 임시 디렉터리로 분리했다.
+
+```powershell
+$env:UV_CACHE_DIR = Join-Path $env:TEMP 'trading-uv-cache'
+uv run --locked pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+docker build -f Dockerfile.test -t trading-test:auth-db .
+docker run --rm --cpus=1 --memory=1g --network=none --read-only --tmpfs /tmp:rw,size=512m trading-test:auth-db python -m pytest -v --tb=short -p no:cacheprovider
+```
+
+이번 변경은 Stage 3에 10개, Stage 5에 18개 사례를 추가하고 기존 인증 실패 기대값을 예외 전파 계약으로 강화했다. 인증은 HTTP 실패·timeout·JSON/필수 필드/빈 토큰/만료 시각 오류를 실제 `auth()`와 임시 캐시에서 검증한다. 갱신 실패의 성공 로그 부재, 기존 환경·헤더·캐시 보존, 만료 후 실제 Queue에서 HTTP 전송 전 거부도 확인한다. DEBUG·SCHED 네 조합의 최초 인증 실패는 serving 진입과 DB 초기화를 막고 Queue·태스크를 남기지 않는다. Queue 생성 이후 예약 시작 실패도 별도 정리 사례로 확인한다.
+
+DB 오류는 격리 SQLite 연결의 authorizer로 실제 SELECT를 거부한다. 일봉 종목·마지막 날짜, 분봉 마지막 시각·종목, 부트스트랩 메타데이터·마스터 건수·일봉 건수 오류가 호출자에게 전달되며 후속 HTTP 전송·체크포인트·초기화가 실행되지 않는지 비교한다. 빈 시장·빈 DB 초기화와 기존 분봉의 날짜/시각 최대값은 별도 정상 사례다. 분봉 초기 조회 후 테이블을 제거하는 실제 스키마 오류는 기존 재시도 4번의 총 시도 후 수집 작업 실패로 전달된다.
+
+수정 전 강화한 인증 focused 테스트는 10실패·1통과, 수명주기·DB focused 테스트는 12실패·3통과였다. 인증 HTTP 정상 반환, 임의 만료 연장, 초기 조회 오류의 빈 데이터·정상 종료 은폐와 인증 예외 시 Queue 잔존을 확인한 결과다. 독립 리뷰 한 명이 관련 28개 사례를 별도로 통과했고 실제 계약 위반을 추가로 발견하지 못했다.
+
+PROD·DEBUG·캐시 파일/만료 비교·예약 `force` 정책, 인증 30초·데이터 10초, PriorityQueue·완료 후 0.1초 간격·취소·재시작을 유지한다. 수집 SQL·저장 구조·MA·스크리너 알고리즘은 바꾸지 않았으며 2,400종목 벤치마크는 반복하지 않았다. 실제 KIS·운영 DB는 접근하지 않았다. 실제 증권사의 토큰 갱신 후 이전 토큰 유효성, 장시간 예약/수집 공존은 미검증이다.
 
 ### 잔여 결함 최종 검증
 

@@ -130,6 +130,7 @@ class SystemScheduler:
             raise
         except Exception as e:
             logger.error("Background auth refresh failed: %s", e)
+            raise
 
     async def refresh_stock_codes_job(self) -> None:
         """종목 마스터 데이터를 갱신하는 스케줄러 Job."""
@@ -166,6 +167,7 @@ class SystemScheduler:
             raise
         except Exception as e:
             logger.error("Scheduled minute OHLCV collector failed: %s", e)
+            raise
 
     async def cleanup_ohlcv_job(self) -> None:
         """새벽 4시(04:00) 일봉/분봉 지능형 가비지 컬렉션 (Intelligent GC).

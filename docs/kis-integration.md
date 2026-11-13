@@ -16,6 +16,12 @@ KIS 통합은 `app/core/kis_auth.py`의 인증과 `app/core/kis_fetch.py`의 데
 
 앱 시작 시 `DEBUG=False`면 `auth(force=True)`, `DEBUG=True`면 `auth(force=False)`를 실행한다. OAuth 토큰 발급 요청의 타임아웃은 30초다.
 
+`auth()`는 성공 시에만 정상 반환하며 HTTP·통신·응답 검증·캐시 저장 실패는 `KisAuthError`로 전달한다. 비어 있는 토큰이나 만료된 토큰, 해석할 수 없는 만료 시각은 인증 성공이 아니다. 잘못된 만료 시각에 임의로 24시간을 부여하던 경로를 제거했다. 정상 캐시의 날짜별 파일 형식과 `만료 시각 > 현재 시각` 비교, `force` 정책은 유지한다.
+
+최초 인증은 DB·Queue 생성 전에 완료해야 하며 실패하면 앱이 serving 상태에 진입하지 않는다. 예약 갱신은 실패 로그와 예외로 APScheduler에 실패를 전달한다. 프로세스 종료나 추가 재시도는 하지 않는다. 갱신 실패는 기존 환경·헤더를 바꾸지 않으며 기존 토큰은 원래 만료 시각까지만 사용할 수 있다. 만료 후 `get_kis_env()`는 예외를 내므로 데이터 전송이 발생하지 않는다.
+
+응답 본문, 검증 오류의 입력값, 통신 예외 원문은 인증 오류 메시지에 포함하지 않는다. KIS Code Assistant MCP로 [공식 토큰 발급 예제](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/auth/auth_token/auth_token.py)의 PROD `/oauth2/tokenP` 및 `client_credentials` 요청 경계를 확인했다. 프로젝트의 실패 전파 계약은 [Stage 3·5](testing.md#인증-db-실패-전파-검증)에서 검증하며 공식 예제 자체는 수정하지 않는다.
+
 ## 전역 요청 큐
 
 `async_kis_fetch()`는 요청과 응답용 Future를 `asyncio.PriorityQueue`에 넣는다. 단일 consumer가 동기 `requests` 호출을 `asyncio.to_thread()`에서 실행한다.

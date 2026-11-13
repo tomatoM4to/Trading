@@ -2,7 +2,7 @@ import copy
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -30,6 +30,7 @@ _is_paper: 모의투자, 실전투자 구분, 기본값 False(실전투자)
 _smart_sleep = 최소 대기 시간
 """
 _kis_env: KisEnvironment | None = None
+_token_expiry: datetime | None = None
 _base_headers = {
     "Content-Type": "application/json",
     "Accept": "text/plain",
@@ -43,7 +44,11 @@ def get_base_header():
     return copy.deepcopy(_base_headers)
 
 
-def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
+class KisAuthError(RuntimeError):
+    pass
+
+
+def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False) -> None:
     """
     - access_token 발급 및 파일 캐싱
     - _kis_env, _base_headers 갱신
@@ -57,7 +62,7 @@ def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
         current = now or datetime.today()
         return config_root / f"KIS{current.strftime('%Y%m%d')}"
 
-    def _read_token() -> str | None:
+    def _read_token() -> tuple[str, datetime] | None:
         token_path = _get_token_path()
         if not token_path.is_file():
             return None
@@ -66,7 +71,7 @@ def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
             with open(token_path, encoding="UTF-8") as f:
                 tkg_tmp = yaml.load(f, Loader=yaml.FullLoader)
         except (OSError, yaml.YAMLError) as e:
-            logger.debug("Failed to read or parse token file: %s", e)
+            logger.debug("Failed to read or parse token file: %s", type(e).__name__)
             return None
 
         if not isinstance(tkg_tmp, dict):
@@ -90,14 +95,14 @@ def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
 
         if exp_dt > now_dt:
             token = tkg_tmp.get("token")
-            if token:
+            if isinstance(token, str) and token.strip():
                 logger.info("Using cached token from %s", token_path.name)
-                return token
+                return token, exp_dt
         return None
 
     appkey, appsecret = _kis_cfg.app_credentials()
 
-    saved_token: str | None = _read_token()
+    saved_token = _read_token()
 
     if saved_token is None or force:
         p = {
@@ -106,45 +111,45 @@ def auth(product: ProductCode = _kis_cfg.my_prod, force: bool = False):
             "appsecret": appsecret,
         }
         token_url = f"{_kis_cfg.api_url()}/oauth2/tokenP"
-        res = requests.post(
-            token_url,
-            data=json.dumps(p),
-            headers=copy.deepcopy(_base_headers),
-            timeout=30,
-        )
-        if res.status_code == 200:
+        try:
+            res = requests.post(
+                token_url,
+                data=json.dumps(p),
+                headers=copy.deepcopy(_base_headers),
+                timeout=30,
+            )
+        except requests.RequestException:
+            raise KisAuthError("KIS authentication request failed") from None
+        if res.status_code != 200:
+            raise KisAuthError(f"KIS authentication failed (HTTP {res.status_code})")
+
+        try:
             token_response = KisTokenResponse.model_validate(res.json())
             my_tk = token_response.access_token
             my_exp = token_response.access_token_token_expired
+            valid_date = datetime.strptime(my_exp, "%Y-%m-%d %H:%M:%S")
+            if not my_tk.strip() or valid_date <= datetime.today():
+                raise ValueError
+        except ValueError:
+            raise KisAuthError("Invalid KIS authentication response") from None
 
-            # 토큰을 파일에 저장
-            token_path = _get_token_path()
+        token_path = _get_token_path()
+        try:
             token_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                valid_date = datetime.strptime(my_exp, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                # 파싱 실패 시 현재 시간 기준 + 24시간
-                valid_date = datetime.now() + timedelta(hours=24)
-
             with open(token_path, "w", encoding="utf-8") as f:
                 f.write(f"token: {my_tk}\n")
                 f.write(f"valid-date: {valid_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            logger.sched("New token acquired and saved to %s", token_path.name)
-        else:
-            logger.error(
-                "Get authentication token failed. Status Code: %s, Response: %s",
-                res.status_code,
-                res.text,
-            )
-            logger.error("Restart app and retry.")
-            return
+        except OSError:
+            raise KisAuthError("Failed to save KIS token cache") from None
+        logger.sched("New token acquired and saved to %s", token_path.name)
     else:
         # 기존 토큰 사용
-        my_tk = saved_token
+        my_tk, valid_date = saved_token
 
     # _kis_env 갱신
-    global _kis_env
+    global _kis_env, _token_expiry
     _kis_env = _kis_cfg.to_environment(product=product, token_key=my_tk)
+    _token_expiry = valid_date
 
     _base_headers["authorization"] = f"Bearer {my_tk}"
     _base_headers["appkey"] = _kis_env.my_app if _kis_env else ""
@@ -156,4 +161,8 @@ def get_kis_cfg() -> KisConfig:
 
 
 def get_kis_env() -> KisEnvironment:
+    if _kis_env is None:
+        raise KisAuthError("KIS authentication is not initialized")
+    if _token_expiry is not None and _token_expiry <= datetime.today():
+        raise KisAuthError("KIS authentication token has expired")
     return _kis_env

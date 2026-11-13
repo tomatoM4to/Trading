@@ -312,7 +312,7 @@ async def run_daily_ohlcv_scheduler(
         last_dates = {row["ticker"]: row["last_date"] for row in cursor.fetchall()}
     except Exception as e:
         logger.error(f"Failed to fetch tickers from DB: {e}")
-        return
+        raise
     finally:
         conn.close()
 

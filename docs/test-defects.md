@@ -8,6 +8,7 @@
 - 2단계: T01·T02·T04·T05·T13·T14 수정. 시간순 정규화로 T03도 해결했다. 원본 전체 변환·상충 중복 거부, 근거 없는 대금의 NULL 처리, 같은 시각의 수정/MA 갱신, 일봉 보존구간 복구와 요청 예산, 수집기 MA 재시도, 두 MA 테이블의 원자적 롤백을 검증한다. 요청량 변화와 복구 범위는 [수집 파이프라인](scheduler.md#일봉-수집)에 기록했다.
 - 3단계: T09·T10·T11 수정. 거래정지·관리종목의 공통 자격과 원본 순위 보존, 정상 빈 랭킹과 HTTP/KIS/응답 행 오류의 SSE 구분, 거래량 API의 날짜 문자열 계약을 검증했다.
 - 잔여 결함: P1-A–E, T12, T16·T17 및 아래 T18 수정. Windows·Docker Linux Stage 1–5 각 126개와 Node 차트 3개를 통과했다. 실제 측정·경계는 [testing.md](testing.md), [benchmark.md](benchmark.md)에 기록했다.
+- 인증·DB 실패 전파: `d248133` 기준 T19·T20 수정. Windows·제한 Docker Linux 각 154개, 전체 Ruff check/format 통과. [조건과 결과](testing.md#인증-db-실패-전파-검증)에 기존 재현과 추가 28개 회귀 사례를 기록했다.
 
 ## 잔여 결함 결과
 
@@ -30,6 +31,18 @@
 - **High / 해결.** 변경 전 Stage 3에서 전송 완료→다음 시작 0.0874265초를 관측했다. `asyncio.sleep(0.1)`만으로 실제 최소 간격을 보장하지 못했다.
 - `kis_fetch.py`에서 고해상도 `perf_counter()` deadline까지 남은 시간을 반복 대기한다. 간격 0.1초·PriorityQueue·HTTP 10초·인증 30초·갱신 정책은 유지한다.
 - 기존 실제 시간 비교를 완화하지 않고 Windows·Linux Stage 3 전체를 통과했다. 타이머 구현 근거는 [CPython 이벤트 루프](https://github.com/python/cpython/blob/v3.12.12/Lib/asyncio/base_events.py)의 `_clock_resolution`과 예약 callback 처리다.
+
+## T19 — 인증 실패의 성공 처리
+
+- **해결.** `auth()`가 HTTP 오류를 기록하고 정상 반환해 최초 시작과 예약 갱신의 성공 로그까지 진행할 수 있었다. 빈 토큰과 만료 토큰도 응답 모델만 통과하면 게시됐고, 잘못된 만료 시각에는 임의의 24시간을 부여했다. 예외를 전파한 경우에도 기존 lifespan은 Queue를 이미 만든 상태에서 정리 구간에 도달하지 못했다.
+- Stage 3 `-k 'auth or refresh'`와 Stage 5 `-k 'initial_auth or start_failure'`로 재현·검증한다. `kis_auth.py`는 안전한 인증 예외와 원래 만료 시각을 유지하며 실패한 갱신으로 기존 환경·헤더를 교체하지 않는다. `main.py`는 인증을 자원 생성 전에 확인하고 Queue 이후는 `finally`로 정리한다. `scheduler.py`는 실패를 APScheduler에 전달한다.
+- 실제 KIS가 갱신 시 이전 토큰을 어떻게 처리하는지는 합성 HTTP·캐시 검증으로 증명하지 않는다.
+
+## T20 — DB SELECT 실패의 빈 데이터·정상 완료 처리
+
+- **해결.** `get_minute_last_times()`의 `{}`, 일봉·분봉 초기 종목 조회의 정상 반환, 부트스트랩 존재/건수 조회의 기본값 유지가 DB 오류를 빈 상태로 바꿨다. 분봉 상위 예약 작업도 예외를 기록한 뒤 정상 반환했다.
+- Stage 5 `-k 'last_times or initial_select or presence_select'`는 실제 격리 SQLite SELECT를 거부한다. 변경 전 수집·부트스트랩이 실패를 전파하지 않았고 분봉은 불필요한 후속 조회에 진입했다. 수정 후 원래 SQLite 예외가 호출자까지 전달되고 초기 실패 후 KIS 전송은 0회다. 정상 빈 결과는 별도 사례로 유지한다.
+- 분봉 초기 조회 뒤 테이블을 제거하면 종목별 시도가 기존 재시도 한도까지 실패한다. 실패 집계 후에도 작업이 정상 종료되지 않도록 일봉과 같이 예외로 보고한다. 호출 간격·재시도 횟수·SQL과 연결 `finally`는 유지했다.
 
 ## 최초 재현 기록
 
