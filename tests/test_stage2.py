@@ -436,3 +436,72 @@ async def test_daily_new_candle_keeps_history_audit_within_five_pages(sandbox):
     assert len(transport.calls) == 5
     assert sandbox.rows("daily_ohlcv") == rows
     assert sandbox.rows("daily_ma") == ma_reference(rows, retention=301)
+
+
+async def test_daily_verified_increment_and_internal_gap_invalidation(sandbox):
+    from tasks.daily_ohlcv_scheduler import process_ticker
+
+    rows = daily_series(501)
+    old_pages = [rows[end - 100 : end][::-1] for end in range(500, 0, -100)]
+    with FakeTransport([response(daily_wire(p)) for p in old_pages]) as transport:
+        await process_ticker("A")
+    assert len(transport.calls) == 5
+    with FakeTransport([response(daily_wire(rows[-100:][::-1]))]) as transport:
+        await process_ticker("A", last_date=rows[-2][1])
+    assert len(transport.calls) == 1
+    assert sandbox.rows("daily_ohlcv") == rows
+    assert sandbox.rows("daily_ma") == ma_reference(rows, retention=301)
+    sandbox.write("DELETE FROM daily_ohlcv WHERE date=?", [(rows[40][1],)])
+    pages = [rows[end - 100 : end][::-1] for end in range(501, 1, -100)]
+    with FakeTransport([response(daily_wire(p)) for p in pages]) as transport:
+        await process_ticker("A", last_date=rows[-1][1])
+    assert len(transport.calls) == 5
+    assert sandbox.rows("daily_ohlcv") == rows
+    assert sandbox.rows("daily_ma") == ma_reference(rows, retention=301)
+
+
+async def test_daily_verified_history_still_honors_explicit_deep_audit(sandbox):
+    from tasks.daily_ohlcv_scheduler import process_ticker
+
+    rows = daily_series(110)
+    pages = [rows[10:][::-1], rows[:10][::-1]]
+    with FakeTransport([response(daily_wire(p)) for p in pages]):
+        await process_ticker("A", target_api_calls=2)
+    changed = list(rows[3])
+    changed[5] += 10
+    rows[3] = tuple(changed)
+    pages = [rows[10:][::-1], rows[:10][::-1]]
+    with FakeTransport([response(daily_wire(p)) for p in pages]) as transport:
+        await process_ticker("A", last_date=rows[-1][1], verify_history=True)
+    assert len(transport.calls) == 2
+    assert sandbox.rows("daily_ohlcv") == rows
+    assert sandbox.rows("daily_ma") == ma_reference(rows)
+
+
+async def test_daily_short_uncertified_history_backfills_before_fast_path(sandbox):
+    from tasks.daily_ohlcv_scheduler import process_ticker
+
+    rows = daily_series(500)
+    sandbox.write("INSERT INTO daily_ohlcv VALUES (?,?,?,?,?,?,?,?)", rows[-10:])
+    pages = [rows[end - 100 : end][::-1] for end in range(500, 0, -100)]
+    with FakeTransport([response(daily_wire(p)) for p in pages]) as transport:
+        await process_ticker("A", last_date=rows[-1][1], verify_history=True)
+    assert len(transport.calls) == 5
+    assert sandbox.rows("daily_ohlcv") == rows
+    assert sandbox.rows("daily_ma") == ma_reference(rows, retention=301)
+
+
+async def test_daily_partial_depth_is_not_certified_as_complete(sandbox):
+    from tasks.daily_ohlcv_scheduler import process_ticker
+
+    rows = daily_series(100)
+    with FakeTransport([response(daily_wire(rows[::-1]))]):
+        await process_ticker("A", target_api_calls=1)
+    conn = database.connect_sqlite()
+    try:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM daily_collection_state").fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()

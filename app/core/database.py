@@ -93,6 +93,13 @@ def init_sqlite_connection() -> None:
         ) WITHOUT ROWID, STRICT
         """)
 
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_collection_state (
+            ticker TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL
+        ) WITHOUT ROWID, STRICT
+        """)
+
         # stock_codes 테이블
         conn.execute("""
         CREATE TABLE IF NOT EXISTS stock_codes (

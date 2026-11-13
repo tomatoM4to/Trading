@@ -30,6 +30,8 @@ MA 메모리 DB는 마지막 연결이 닫히면 사라진다. `_keepalive_ma_co
 
 복합 기본 키 `(ticker, date)`를 사용한다. `date`, 가격, 거래량, 거래대금은 `INTEGER`다.
 
+`daily_collection_state(ticker, fingerprint)`는 최신 500봉의 검증된 로컬 상태를 기록한다. OHLCV와 같은 트랜잭션으로 기록하며, 삭제·값 수정·부분 수집으로 일치하지 않으면 증분 조기 종료를 허용하지 않는다. 500봉 미만은 인증하지 않는다. 서버의 과거 수정 여부나 거래일 달력을 증명하는 정보는 아니다. 재시작의 깊은 검증과 [수집 계약](scheduler.md#일봉-수집)을 함께 적용한다.
+
 ### `minute_ohlcv`
 
 복합 기본 키 `(ticker, date, time)`을 사용한다. `date`는 `YYYYMMDD`, `time`은 `HHMMSS` 형태의 `INTEGER`다. `amount`와 원본 누적대금 `cumulative_amount`는 nullable이다. 기존 DB에는 시작 시 nullable 열만 추가하며 이전 행의 대금을 변경하지 않는다.

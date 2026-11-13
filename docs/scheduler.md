@@ -34,9 +34,13 @@ MA 재구축은 두 MA 테이블을 한 트랜잭션으로 교체한다. 실패�
 
 `app/tasks/daily_ohlcv_scheduler.py`는 종목별 기존 최신 날짜를 확인하고 KIS 일봉 API로 부족한 구간을 가져온다. 결과는 STRICT 스키마에 맞게 정수로 변환하고 bulk upsert한다.
 
-기존 데이터가 있으면 최신 날짜와의 첫 overlap에서 멈추지 않고, 기존 최신 500봉과 신규 응답 날짜를 합쳐 정한 최신 500봉 구간의 시작까지 재검증한다. 거래일 달력이나 다른 종목의 거래일을 추정 기준으로 사용하지 않는다. 기존 최대 5페이지 예산 안에 시작 경계까지 확인하지 못하면 불완전 수집 예외를 전달하며 해당 수집 결과를 저장하지 않는다. 로컬에 남아 있는 가장 오래된 날짜 이전의 누락까지 보장하는 계약은 아니다.
+정상 증분과 깊은 검증을 구분한다. 최초 수집·인증 없는 기존 DB·로컬 이력 변경·명시적 `verify_history=True`는 깊게 조회한다. `SCHED=True` 부트스트랩은 깊은 검증을 요청한다. 최신 500봉과 일치하는 `daily_collection_state` fingerprint가 있는 경우에만 최신 날짜 overlap에서 증분 종료한다. 따라서 `MAX(date)`만 같다는 이유로 내부 갭을 정상으로 판단하지 않는다.
 
-호출량은 증가한다. 합성 110봉의 첫 페이지 밖 갭은 기존 1회에서 2회, 220봉의 반복 검증은 1회에서 3회가 필요했다. 500봉과 신규 1봉 사례는 5회 안에 종료했다. 약 2,400종목에서는 기본 수집 1회당 최대 12,000회이며, 0.1초 대기만 합산한 하한은 약 20분이다(HTTP 지연·재시도 제외, 운영 측정값 아님). 호출 간격과 최대 페이지 수는 늘리지 않았다. 일봉 API의 100건 상한은 [KIS 공식 예제](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/inquire_daily_itemchartprice/inquire_daily_itemchartprice.py)를 KIS Code Assistant MCP로 확인했다.
+깊은 검증은 기존·신규의 최신 500봉 경계까지 확인한다. 최근 10봉만 남은 DB도 첫 100건 페이지가 가득 차면 추가 backfill한다. 500봉 미만의 결과는 조회한 범위만 저장하고 인증하지 않는다. 요청 예산 내 기존 시작 경계까지 도달하지 못하면 저장 없이 불완전 예외를 전달한다. 거래일 달력·타 종목 거래일을 추정하지 않는다. 확인한 응답 범위에서 원본에 없는 로컬 행은 같은 트랜잭션으로 제거하며, 수집 중 다른 쓰기로 로컬 fingerprint가 바뀌면 실패한다.
+
+overlap의 과거 값이나 날짜가 달라지면 수정주가 등의 변경 가능성 때문에 깊은 검증으로 전환한다. 페이지 밖의 증권사 과거 정정은 로컬 fingerprint로 발견할 수 없으며 다음 깊은 검증까지 지연될 수 있다. 인증은 원본 500봉을 확보한 로컬 범위의 증분 연속성 근거이며, 실제 API 응답의 완전성을 독립적으로 증명하지 않는다.
+
+일봉 API 100건 상한은 [KIS 공식 예제](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/inquire_daily_itemchartprice/inquire_daily_itemchartprice.py)를 MCP로 확인했다. 200일 요청 범위·최대 5회·전역 Queue는 유지한다. 같은 합성 4종목에서 정상 증분은 20→4회, 최초 수집과 갭 복구는 각 20회였다([측정](benchmark.md)). 2,400종목 정상 증분의 0.1초 대기 합산 하한은 20분→4분이다. HTTP·재시도·DB 처리와 `acquire()` 보유시간을 제외한 산술값이며 운영 실측이 아니다.
 
 일봉 MA는 중복 입력을 상태형 계산기에 다시 누적하지 않고, upsert가 끝난 뒤 해당 종목의 canonical OHLCV 전체에서 재계산한다.
 

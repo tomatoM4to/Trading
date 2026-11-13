@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -12,6 +14,20 @@ logger.setLevel(logging.INFO)
 API_URL = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 TR_ID = "FHKST03010100"  # 국내주식기간별시세
 DAILY_HISTORY_RETENTION = 500
+
+
+def retained_daily_rows(conn, ticker: str) -> list[tuple]:
+    return [
+        tuple(row)
+        for row in conn.execute(
+            "SELECT * FROM daily_ohlcv WHERE ticker=? ORDER BY date DESC LIMIT ?",
+            (ticker, DAILY_HISTORY_RETENTION),
+        )
+    ]
+
+
+def history_fingerprint(rows: list[tuple]) -> str:
+    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
 
 
 def rebuild_daily_ma_for_ticker(main_conn, ma_conn, ticker: str) -> None:
@@ -80,7 +96,11 @@ async def fetch_and_save_ohlcv(
 
 
 async def process_ticker(
-    ticker: str, last_date: int | None = None, target_api_calls: int = 5
+    ticker: str,
+    last_date: int | None = None,
+    target_api_calls: int = 5,
+    *,
+    verify_history: bool = False,
 ):
     """
     한 종목에 대해 여러 번 API를 호출하여 충분한 과거 데이터(예: 5번 호출 시 최대 500영업일)를 수집.
@@ -89,21 +109,26 @@ async def process_ticker(
     from core.database import connect_ma_db, connect_sqlite
 
     all_data = []
-    retained_dates = set()
-    if last_date is not None:
-        conn = connect_sqlite()
-        try:
-            retained_dates = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT date FROM daily_ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT ?",
-                    (ticker, DAILY_HISTORY_RETENTION),
-                )
-            }
-        finally:
-            conn.close()
-    repair_history = bool(retained_dates)
+    conn = connect_sqlite()
+    try:
+        retained = retained_daily_rows(conn, ticker)
+        fingerprint = history_fingerprint(retained)
+        verified = conn.execute(
+            "SELECT fingerprint FROM daily_collection_state WHERE ticker=?", (ticker,)
+        ).fetchone()
+    finally:
+        conn.close()
+    retained_dates = {row[1] for row in retained}
+    repair_history = bool(retained) and (
+        verify_history
+        or len(retained) < DAILY_HISTORY_RETENTION
+        or verified is None
+        or verified[0] != fingerprint
+    )
     history_complete = not repair_history
+    latest_date = max(retained_dates) if retained_dates else None
+    if retained:
+        history_complete = False
 
     # KIS API는 1회 호출에 최대 100건(영업일)을 반환하므로,
     # 응답으로 온 가장 오래된 날짜의 하루 전을 다음 호출의 종료일로 설정하여 거슬러 올라감.
@@ -126,6 +151,34 @@ async def process_ticker(
         # 가져온 데이터 중 가장 과거 날짜를 찾아서 다음 루프의 end_date로 세팅
         oldest_date_str = min(item.stck_bsop_date for item in valid_items)
 
+        if retained and not repair_history:
+            incoming = {
+                int(item.stck_bsop_date): (
+                    ticker,
+                    int(item.stck_bsop_date),
+                    int(item.stck_oprc),
+                    int(item.stck_hgpr),
+                    int(item.stck_lwpr),
+                    int(item.stck_clpr),
+                    int(item.acml_vol),
+                    int(item.acml_tr_pbmn),
+                )
+                for item in valid_items
+            }
+            repair_history = any(
+                int(oldest_date_str)
+                <= row[1]
+                <= int(current_end_date.strftime("%Y%m%d"))
+                and (
+                    row[1] not in incoming
+                    or (row[1] != latest_date and incoming[row[1]] != row)
+                )
+                for row in retained
+            )
+            if not repair_history and int(oldest_date_str) <= latest_date:
+                history_complete = True
+                break
+
         if repair_history:
             retained_dates.update(int(item.stck_bsop_date) for item in valid_items)
             retained_dates = set(
@@ -133,13 +186,17 @@ async def process_ticker(
             )
             if int(oldest_date_str) <= min(retained_dates):
                 history_complete = True
-                break
+                if (
+                    len(retained_dates) >= DAILY_HISTORY_RETENTION
+                    or len(valid_items) < 100
+                ):
+                    break
 
         oldest_date = datetime.strptime(oldest_date_str, "%Y%m%d")
         current_end_date = oldest_date - timedelta(days=1)
 
         # 상장한 지 얼마 안 된 종목이라 더 이상 과거 데이터가 안 나오면 중단
-        if not repair_history and len(valid_items) < 10:
+        if not retained and len(valid_items) < 100:
             break
 
     if not history_complete:
@@ -179,7 +236,16 @@ async def process_ticker(
     conn = connect_sqlite()
     ma_conn = connect_ma_db()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if history_fingerprint(retained_daily_rows(conn, ticker)) != fingerprint:
+            raise RuntimeError(f"[{ticker}] Daily history changed during collection")
         cursor = conn.cursor()
+        dates = sorted({record["date"] for record in records})
+        placeholders = ",".join("?" for _ in dates)
+        cursor.execute(
+            f"DELETE FROM daily_ohlcv WHERE ticker=? AND date BETWEEN ? AND ? AND date NOT IN ({placeholders})",
+            (ticker, dates[0], int(datetime.now().strftime("%Y%m%d")), *dates),
+        )
         cursor.executemany(
             """
             INSERT OR REPLACE INTO daily_ohlcv (ticker, date, open, high, low, close, volume, amount)
@@ -187,6 +253,14 @@ async def process_ticker(
         """,
             records,
         )
+        verified_rows = retained_daily_rows(conn, ticker)
+        if len(verified_rows) == DAILY_HISTORY_RETENTION:
+            conn.execute(
+                "INSERT OR REPLACE INTO daily_collection_state VALUES (?,?)",
+                (ticker, history_fingerprint(verified_rows)),
+            )
+        else:
+            conn.execute("DELETE FROM daily_collection_state WHERE ticker=?", (ticker,))
         conn.commit()
 
         rebuild_daily_ma_for_ticker(conn, ma_conn, ticker)
@@ -200,7 +274,9 @@ async def process_ticker(
         ma_conn.close()
 
 
-async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
+async def run_daily_ohlcv_scheduler(
+    market: str = "KOSPI", *, verify_history: bool = False
+):
     """
     지정된 시장의 모든 종목의 일봉 데이터를 수집하는 스케줄러.
     """
@@ -257,7 +333,7 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
             requeue_count = item["requeue_count"]
 
             try:
-                await process_ticker(ticker, last_date)
+                await process_ticker(ticker, last_date, verify_history=verify_history)
                 success_count += 1
                 if success_count % 100 == 0:
                     logger.sched(
@@ -294,6 +370,10 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
     logger.sched(f"Total FAILED: {fail_count}")
     logger.sched(f"Elapsed Time: {elapsed_time}")
     logger.sched("=====================================================")
+    if fail_count:
+        raise RuntimeError(
+            f"Daily collection failed for {fail_count} tickers in {market}"
+        )
 
 
 _running_scheduler_task: asyncio.Task | None = None
