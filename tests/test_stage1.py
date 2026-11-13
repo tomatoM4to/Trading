@@ -110,6 +110,24 @@ async def test_disk_ma_and_thread_context_are_isolated(sandbox):
         conn.close()
 
 
+def test_disk_attach_shares_ma_and_detach_preserves_keepalive(sandbox):
+    ma = database.connect_ma_db()
+    disk = database.connect_sqlite()
+    try:
+        ma.execute("INSERT INTO daily_ma (ticker,date,ma5) VALUES ('A',20261112,123)")
+        ma.commit()
+        disk.execute("ATTACH DATABASE ? AS madb", (sandbox.ma_uri,))
+        assert disk.execute("SELECT ma5 FROM madb.daily_ma").fetchone()[0] == 123
+        assert disk.execute("PRAGMA database_list").fetchall()[-1][2] == ""
+        disk.execute("DETACH DATABASE madb")
+        ma.close()
+        ma = database.connect_ma_db()
+        assert ma.execute("SELECT ma5 FROM daily_ma").fetchone()[0] == 123
+    finally:
+        disk.close()
+        ma.close()
+
+
 def test_guard_rejects_outside_db_and_attach(offline):
     count = len(offline.blocked)
     with pytest.raises(AssertionError):

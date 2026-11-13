@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import re
 import socket
 import sqlite3
 import sys
@@ -33,6 +34,17 @@ SYNTHETIC_CONFIG = {
 
 class TrackedConnection(sqlite3.Connection):
     closed = False
+    bound_attach = False
+
+    def execute(self, sql, parameters=(), /):
+        if re.fullmatch(r"\s*ATTACH DATABASE \? AS \w+\s*", sql, re.IGNORECASE):
+            if len(parameters) != 1 or not self.allowed_target(parameters[0]):
+                raise AssertionError("Offline harness blocked bound ATTACH target")
+            self.bound_attach = True
+        try:
+            return super().execute(sql, parameters)
+        finally:
+            self.bound_attach = False
 
     def close(self):
         super().close()
@@ -80,10 +92,14 @@ class OfflineEnvironment:
             )
         kwargs.setdefault("factory", TrackedConnection)
         conn = self.original_connect(path, *args, **kwargs)
+        conn.allowed_target = self.allowed_target
         conn.set_authorizer(
             lambda action, arg1, arg2, db, trigger: (
                 sqlite3.SQLITE_DENY
-                if action == sqlite3.SQLITE_ATTACH and not self.allowed_target(arg1)
+                if action == sqlite3.SQLITE_ATTACH
+                and not (
+                    self.allowed_target(arg1) or (arg1 is None and conn.bound_attach)
+                )
                 else sqlite3.SQLITE_OK
             )
         )

@@ -625,7 +625,7 @@ class ScreenerEngine:
 
         conn = connect_sqlite()
         try:
-            conn.execute(f"ATTACH DATABASE '{_MA_MEM_DB_URI}' AS madb")
+            conn.execute("ATTACH DATABASE ? AS madb", (_MA_MEM_DB_URI,))
 
             placeholders = ", ".join("?" for _ in current_tickers.keys())
             query_params = [*current_tickers.keys(), threshold]

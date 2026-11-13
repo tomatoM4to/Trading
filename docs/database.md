@@ -71,11 +71,13 @@ FastAPI 요청에서는 `get_db()`와 `get_ma_db()` dependency가 같은 원칙�
 
 ## 테스트 DB 라우팅
 
-`test_db_var`는 현재 비동기 컨텍스트에만 DB 파일 경로를 덮어쓴다. 관리자 통합 검증은 이를 사용해 운영 DB 대신 `test_trading.db`로 라우팅하고 작업이 끝나면 ContextVar 토큰을 반드시 reset한다.
+`test_db_var`는 현재 비동기 컨텍스트에만 DB 파일 경로를 덮어쓴다. 테스트가 끝나면 ContextVar 토큰을 reset한다. 운영 관리자 테스트 API는 삭제했고 격리 pytest를 사용한다.
 
 `test_mem_var`는 테스트 전용 메모리 URI를 우선 적용한다. 동적 메모리 테스트에서는 별도 keep-alive 연결이 필요하다.
 
-`test_db_var`와 `test_mem_var`는 MA URI를 변경하지 않는다. 공개 관리자 검증 기능의 ContextVar만으로 MA까지 격리된다고 가정하면 안 된다. 새 자동 하네스는 [testing.md](testing.md)처럼 고유 MA URI·keepalive·연결 대상 검사까지 별도로 적용한다. Windows 디스크 연결에서 MA URI ATTACH가 파일로 해석되는 문제는 [T12](test-defects.md#t12--windows-디스크-정본에서-ma-uri-attach가-파일로-해석됨)에 재현 조건을 기록했다.
+`test_db_var`와 `test_mem_var`는 MA URI를 변경하지 않는다. 자동 하네스는 [testing.md](testing.md)처럼 고유 MA URI·keepalive·연결 대상 검사까지 별도로 적용한다.
+
+디스크 연결도 `uri=True`로 열고 MA ATTACH 값은 바인딩한다. [SQLite URI 계약](https://www.sqlite.org/uri.html)에 따르면 최초 연결의 URI 설정이 ATTACH에도 적용된다. Windows SQLite 3.50.4에는 `USE_URI` 기본 옵션이 없고 Linux 3.40.1에는 있으므로, 기본 설정에 의존하면 T12처럼 플랫폼 결과가 달라진다. 명시적 URI 연결과 keepalive·DETACH 후 재연결은 양쪽에서 검증했다. 재현 명령은 `python scripts/sqlite_probe.py`다.
 
 ## 쿼리 원칙
 

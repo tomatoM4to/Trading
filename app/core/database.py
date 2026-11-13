@@ -45,7 +45,7 @@ def connect_sqlite() -> sqlite3.Connection:
         conn = sqlite3.connect(db_path, uri=True, check_same_thread=False)
     else:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn = sqlite3.connect(db_path, uri=True, check_same_thread=False)
         # WAL 모드는 동시 읽기/쓰기를 개선하지만, 파일 시스템에 따라 호환성 문제가 있을 수 있습니다.
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
