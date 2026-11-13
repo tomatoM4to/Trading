@@ -84,10 +84,10 @@ npx tsc --noEmit
 npm run build
 ```
 
-표준 `unittest` 기반 백엔드 정합성 하네스는 다음 명령으로 실행한다.
+pytest 기반 백엔드 정합성 하네스는 다음 명령으로 실행한다.
 
 ```powershell
-uv run --locked python -m tests.run
+uv run --locked pytest
 ```
 
 Stage별 명령·실행 결과·실제 API 선택 검증 및 미검증 범위는 [testing.md](testing.md)를 따른다. 발견한 결함은 실패 테스트로 보존하므로 현재 기본 실행은 종료 코드 1이다. [test-defects.md](test-defects.md)의 재현된 실패를 숨기려고 운영 코드를 수정하거나 skip하지 않는다.

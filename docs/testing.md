@@ -41,11 +41,11 @@ KIS Code Assistant MCP의 search/read_source_code로 [일봉 공식 예제](http
 
 - 독립 기준: 고정 JSON의 전체 OHLCV 튜플, `Fraction`으로 계산한 각 MA 창, Python 목록/집합으로 계산한 필터와 AND 우선 OR 체인. 운영 함수의 출력을 기대값으로 재호출하지 않는다.
 - MA의 기간 부족은 `None`, 저장 MA의 소수 둘째 자리 반올림은 독립 합계/분수 계산으로 확인한다. 차트 SQL MA는 반올림하지 않은 평균과 비교한다. 날짜·시간은 유효한 달력 날짜와 6자리 시각으로 구성한다.
-- `tests/support.py`는 실제 KIS 설정을 읽기 전에 그 **정확한 경로만** 합성 설정으로 대체한다. `.env`나 토큰 캐시를 사용하지 않는다. 인증 단독 테스트의 `config_root`도 임시 경로다.
+- `tests/conftest.py`의 `pytest_configure`가 테스트 모듈 수집 전에 `OfflineEnvironment`를 시작한다. 실제 KIS 설정의 **정확한 경로만** 합성 설정으로 대체한다. `.env`나 토큰 캐시를 사용하지 않는다. 인증 단독 테스트의 `config_root`도 임시 경로다. `tests.support`를 import하는 것만으로는 전역 패치를 설치하지 않는다.
 - HTTP Session 및 socket 외부 연결을 차단한다. Windows `asyncio` 내부 `socket._fallback_socketpair`의 자체 연결만 허용한다. 데이터 통합 테스트는 `requests.get/post`만 Fake로 교체하고 `_do_fetch`, Queue와 0.1초 대기는 실행한다. 전송 예산을 넘으면 Fake가 실패한다. Cold 테스트는 URL/TR/종목/조회 기간/플래그/timeout도 비교한다.
 - 테스트별 임시 디스크 DB + UUID MA URI + 실제 `init_sqlite_connection()`을 사용한다. ContextVar뿐 아니라 환경 경로와 `_MA_MEM_DB_URI`, keepalive를 분리한다. 모든 Python `sqlite3.connect`와 SQL ATTACH 대상을 검사한다. 운영 MA URI 및 임시 루트 밖 DB는 거부한다.
 - 디스크 연결의 URI 해석이 꺼진 Windows에서 ATTACH 문자열이 파일로 해석되는 것까지 검증하기 위해, 테스트 작업 디렉터리도 임시 폴더로 바꾼다. 결함을 숨기려고 운영 연결에 `uri=True`를 강제하지 않는다.
-- 연결을 추적하고 종료 시 keepalive 이외 미종료 연결을 실패로 판정한 뒤 정리한다. ContextVar/환경/전역 URI를 복구한다. Queue를 종료하고 장애 재현 중 남은 태스크·전송 gate도 정리한다. 전역 패치와 cwd를 사용하므로 **동일 프로세스 병렬 테스트는 지원하지 않는다**.
+- 함수 범위의 비동기 `sandbox` fixture가 테스트마다 DB를 초기화하고 Queue를 종료한다. 연결을 추적하고 종료 시 keepalive 이외 미종료 연결을 실패로 판정한 뒤 정리한다. ContextVar/환경/전역 URI를 복구한다. 장애 재현 중 남은 태스크·전송 gate도 각 테스트가 정리한다. 전역 패치와 cwd를 사용하므로 **동일 프로세스 병렬 테스트는 지원하지 않는다**.
 - 차트 API는 실제 앱의 라우터/가드를 사용하지만 TestClient lifespan은 시작하지 않는다. 실제 시작은 인증과 스케줄러를 실행하기 때문이다. 프론트엔드 테스트는 사용자 요청으로 제거했으며 기본 하네스에는 Node/TypeScript가 필요하지 않다.
 
 ## Tests
@@ -54,18 +54,19 @@ KIS Code Assistant MCP의 search/read_source_code로 [일봉 공식 예제](http
 
 ```powershell
 uv sync --locked
-uv run --locked python -m tests.run
+uv run --locked pytest
 ```
 
-설치된 환경에서는 `.venv/Scripts/python.exe -m tests.run`으로도 실행할 수 있다. 이번 관리형 환경에서는 기본 uv 캐시 권한 때문에 임시 디렉터리의 별도 `--cache-dir`로 설치했다. `unittest discover -s tests -v`도 지원한다. 실행 지표는 `tests.run`이 콘솔에 출력하며, 필요할 때만 `--report <경로>`로 저장한다. 저장된 결과 JSON은 사용자 요청으로 제거했다.
+설치된 환경에서는 `.venv/Scripts/python.exe -m pytest`로도 실행할 수 있다. 이번 관리형 환경에서는 기본 uv 캐시 권한 때문에 임시 디렉터리의 별도 `--cache-dir`로 설치했다. 구형 `unittest` 실행기 `tests/run.py`는 제거했다. 결과는 콘솔에 출력하며 JSON을 자동 생성하지 않는다. 필요하면 pytest 표준 `--junitxml <경로>`로 별도 저장한다.
 
 ```powershell
-uv run --locked python -m tests.run --stage 1
-uv run --locked python -m tests.run --stage 2
-uv run --locked python -m tests.run --stage 3
-uv run --locked python -m tests.run --stage 4
-uv run --locked python -m tests.run --stage 5
-uv run --locked python -m tests.run --stage 3 --match restart_does_not_overlap
+uv run --locked pytest -m stage1
+uv run --locked pytest -m stage2
+uv run --locked pytest -m stage3
+uv run --locked pytest -m stage4
+uv run --locked pytest -m stage5
+uv run --locked pytest -m stage3 -k restart_does_not_overlap
+uv run --locked pytest --durations=10 --tb=short
 uv run --locked ruff check tests scripts/benchmark_screener.py
 uv run --locked ruff format --check tests scripts/benchmark_screener.py
 ```
@@ -78,7 +79,11 @@ uv run --locked ruff format --check tests scripts/benchmark_screener.py
 | 4 | 모든 로컬 필터의 산술 참조, AND/OR 4조합과 순서 최적화 비교, 랭킹과 종목 자격, SSE 단일 terminal/오류, 차트 API 전체 OHLCV/시각/MA/일봉 overlay, 거래량 API |
 | 5 | MA 메모리 소실 후 재구축, 별도 프로세스의 commit 직전/직후 강제 종료, 무결성 검사, WAL reader snapshot/checkpoint, 쓰기 잠금 실패·재시도, MA 실패·수집 취소·가드·GC |
 
-`tests.run`은 테스트 수, 통과/실패/오류/스킵, 실패 ID, 시간과 peak RSS를 출력한다. 메서드 기준으로 집계해 여러 subTest 실패를 중복 합산하지 않는다. 상세 배열은 subTest를 포함한다. RSS는 **같은 Python 프로세스의 누적 최고치**이며 crash 자식과 OS page cache를 포함하지 않는다.
+pytest는 각 파라미터 사례를 별도 테스트로 집계한다. 실패 ID에는 일봉/분봉, 필터, AND/OR 조합 또는 수집기 종류가 표시된다. 예를 들어 `uv run --locked pytest 'tests/test_stage4.py::test_each_local_filter_matches_arithmetic_reference[disparity-above-minute]'`로 한 사례만 실행한다. `-m`은 Stage, `-k`는 이름/파라미터 ID를 선택한다. `--collect-only -q`로 실행 없이 목록을 볼 수 있다.
+
+`conftest.py`는 안전장치와 공통 `sandbox`, `offline`, `candles` fixture를 관리한다. 스크리너 데이터와 엔진 fixture는 Stage 4 파일에 둔다. 테스트는 일반 함수와 `assert`/`pytest.raises`를 사용하며 반복 입력은 `parametrize`로 분리한다. 비동기 테스트와 fixture의 이벤트 루프 범위는 함수로 고정한다. 기준은 [pytest fixture](https://docs.pytest.org/en/stable/how-to/fixtures.html), [parametrize](https://docs.pytest.org/en/stable/how-to/parametrize.html), [pytest-asyncio 설정](https://pytest-asyncio.readthedocs.io/en/stable/reference/configuration.html)이다.
+
+실행시간과 성공/실패/오류/스킵은 pytest가 집계하고, 종료 시 peak RSS를 추가 출력한다. RSS는 **같은 Python 프로세스의 누적 최고치**이며 crash 자식과 OS page cache를 포함하지 않는다. 독립 벤치마크도 같은 `tests/metrics.py`를 사용한다.
 
 ### 실제 KIS 선택 검증 — 이번 세션 미실행
 
@@ -94,16 +99,22 @@ uv run --locked python -m tests.live_kis --allow-live --ticker 005930
 
 ## 실행 결과와 한계
 
-2026-11-13, 소스 `5a363e6`, Windows / Python 3.12.12 / SQLite 3.50.4. 프론트엔드 3개를 제외한 백엔드 하네스 집계다. [결함 보고서](test-defects.md), [벤치마크 측정 조건과 요약](benchmark.md).
+2026-11-13, Windows / Python 3.12.12 / SQLite 3.50.4 / pytest 9.2.0 / pytest-asyncio 1.5.0. `c18b8f3` 이후 pytest 전환 작업 트리에서 실제 실행했다. 운영 코드는 변경하지 않았다. [결함 보고서](test-defects.md), [벤치마크 측정 조건과 요약](benchmark.md).
 
 | Stage | 실행 | 통과 | 실패 | 오류 | 스킵 |
 |---|---:|---:|---:|---:|---:|
-| 1 | 5 | 5 | 0 | 0 | 0 |
+| 1 | 8 | 8 | 0 | 0 | 0 |
 | 2 | 14 | 9 | 5 | 0 | 0 |
 | 3 | 7 | 4 | 3 | 0 | 0 |
-| 4 | 7 | 3 | 3 | 1 | 0 |
-| 5 | 10 | 7 | 3 | 0 | 0 |
-| 합계 | 43 | 28 | 14 | 1 | 0 |
+| 4 | 35 | 28 | 7 | 0 | 0 |
+| 5 | 11 | 7 | 4 | 0 | 0 |
+| 합계 | 75 | 56 | 19 | 0 | 0 |
+
+전체 실행은 11.10초, 누적 peak RSS 119.3 MiB였다. 실패 19개는 기존 백엔드 결함 T01–T15의 재현이다. 전환 직전 같은 환경의 unittest 기준은 메서드 43개, 통과 28·실패 14·오류 1이었다. pytest에서는 subTest/반복문 사례를 분리했고 테스트 본문의 예외도 FAILED로 집계하므로 건수를 직접 비교하면 안 된다. Stage 1에는 지원 모듈 import의 무부작용과 HTTP/socket 차단 검증을 추가했다. setup/teardown 오류와 스킵은 없다.
+
+독립 검토의 전환 중 전체 실행에서는 기존 Stage 3 간격 검사도 한 번 실패했다(완료→다음 시작 0.0997286초). 최종 전체 실행에서는 통과했다. 0.1초 기준과 실제 Queue 대기는 그대로 유지했으며, Windows 타이머/스케줄링과 Linux 운영 환경에서의 추가 검증이 필요하다. 이를 새 확정 결함으로 합산하지 않았다.
+
+별도 벤치마크는 인터페이스 연결 확인을 위해 `--tickers 2 --repeats 1`로 실행해 2,180행·기대 종목 1개와 필터 값 일치를 확인했다. 과거 서버 측정의 대체 자료나 성능 개선 근거로 사용하지 않는다. 저장된 결과 JSON과 프론트엔드 테스트는 복원하지 않았다.
 
 독립 검토자는 Windows ATTACH를 순수 SQLite로 재현했다. 차트 timestamp/일봉 overlay 누락과 전송 요청 종목 검증 누락도 지적했다. 둘 다 보강 후 원본 통과, 응답 MA 또는 요청 종목을 훼손한 mutation 실패를 확인했다. 테스트 검토 때문에 운영 코드를 수정하지 않았다.
 
@@ -119,6 +130,6 @@ uv run --locked python -m tests.live_kis --allow-live --ticker 005930
 | 프론트엔드 집계/브라우저 렌더링/SSE 사용자 취소 | 사용자 요청으로 프론트엔드 테스트를 제거. 이전 함수 단위 발견 내용 T16·T17은 과거 기록으로만 보존 |
 | 관리자 검증 API 전체/실패 표본 집계 | 운영 자산을 건드리는 공개 검증 API는 조사만 수행. 기본 테스트 대체물로 사용하지 않음 |
 
-운영 코드 변경 없이 해결한 환경 문제는 의존성 설치, 내부 socketpair 예외, 임시 cwd/DB/MA 라우팅, 인증 설정 주입이다. `unittest.assertRaises`의 traceback frame 정리가 Queue가 전달한 예외의 suspended consumer frame을 닫는 경우가 있어 전송 timeout은 명시적 try/except와 유한 대기로 관측한다. FastAPI의 잠금 의존성에서 TestClient deprecation 경고가 있지만 테스트 실행 오류는 아니다.
+운영 코드 변경 없이 해결한 환경 문제는 의존성 설치, 내부 socketpair 예외, 임시 cwd/DB/MA 라우팅, 인증 설정 주입이다. timeout은 `pytest.raises`와 유한 대기로 확인하고 같은 worker의 후속 처리도 검증했다. 기존 AnyIO 플러그인의 pytest 10 예정 제거 API 경고와 TestClient의 httpx deprecation 경고 2건은 남아 있다. 관련 운영 의존성을 변경하거나 경고를 숨기지 않았다.
 
 백엔드 후속 작업 우선순위는 Queue 종료·재시작 직렬화/미완료 Future/수집 worker 소유권 → 분봉 수정·거래대금·MA 실패 상태 → 스크리너 정렬/외부 오류·API schema → 플랫폼 ATTACH다. 각 수정은 해당 실패 테스트를 보존한 별도 작업으로 진행한다.
