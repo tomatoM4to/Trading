@@ -90,7 +90,7 @@ pytest 기반 백엔드 정합성 하네스는 다음 명령으로 실행한다.
 uv run --locked pytest
 ```
 
-Stage별 명령·실행 결과·실제 API 선택 검증 및 미검증 범위는 [testing.md](testing.md)를 따른다. 발견한 결함은 실패 테스트로 보존하므로 현재 기본 실행은 종료 코드 1이다. [test-defects.md](test-defects.md)의 재현된 실패를 숨기려고 운영 코드를 수정하거나 skip하지 않는다.
+Stage별 명령·실행 결과·실제 API 선택 검증 및 미검증 범위는 [testing.md](testing.md)를 따른다. 현재 Windows 기본 실행은 미해결 T12의 4개 사례 때문에 종료 코드 1이다. [test-defects.md](test-defects.md)의 수정 이력을 확인하고, 남은 실패를 skip하거나 기대값을 완화해 숨기지 않는다.
 
 ## 장애 점검 순서
 
@@ -107,4 +107,4 @@ Stage별 명령·실행 결과·실제 API 선택 검증 및 미검증 범위는
 - API 문서가 인증 없이 노출된다.
 - 배포 전에 자동 품질 게이트가 없다.
 - Compose 배포가 컨테이너를 먼저 내리므로 중단 시간이 있다.
-- 새 정합성 하네스에서 수집·Queue·최적화·복구 결함이 재현됐다. 수정과 운영 환경 재검증은 별도 작업이다.
+- Queue·수집·최적화·복구의 요청된 결함은 오프라인 하네스로 수정 검증했다. Windows MA ATTACH(T12), 실제 KIS·Linux·1GB 장시간 환경 검증은 남아 있다.

@@ -46,7 +46,7 @@ KIS Code Assistant MCP의 search/read_source_code로 [일봉 공식 예제](http
 - 테스트별 임시 디스크 DB + UUID MA URI + 실제 `init_sqlite_connection()`을 사용한다. ContextVar뿐 아니라 환경 경로와 `_MA_MEM_DB_URI`, keepalive를 분리한다. 모든 Python `sqlite3.connect`와 SQL ATTACH 대상을 검사한다. 운영 MA URI 및 임시 루트 밖 DB는 거부한다.
 - 디스크 연결의 URI 해석이 꺼진 Windows에서 ATTACH 문자열이 파일로 해석되는 것까지 검증하기 위해, 테스트 작업 디렉터리도 임시 폴더로 바꾼다. 결함을 숨기려고 운영 연결에 `uri=True`를 강제하지 않는다.
 - 함수 범위의 비동기 `sandbox` fixture가 테스트마다 DB를 초기화하고 Queue를 종료한다. 연결을 추적하고 종료 시 keepalive 이외 미종료 연결을 실패로 판정한 뒤 정리한다. ContextVar/환경/전역 URI를 복구한다. 장애 재현 중 남은 태스크·전송 gate도 각 테스트가 정리한다. 전역 패치와 cwd를 사용하므로 **동일 프로세스 병렬 테스트는 지원하지 않는다**.
-- 차트 API는 실제 앱의 라우터/가드를 사용하지만 TestClient lifespan은 시작하지 않는다. 실제 시작은 인증과 스케줄러를 실행하기 때문이다. 프론트엔드 테스트는 사용자 요청으로 제거했으며 기본 하네스에는 Node/TypeScript가 필요하지 않다.
+- 차트 API는 실제 앱의 라우터/가드를 사용하지만 TestClient lifespan은 시작하지 않는다. 랭킹 SSE는 AsyncClient·ASGITransport로 하네스와 같은 이벤트 루프에서 실행해 전역 Queue의 소유 루프를 유지한다. 앱의 실제 시작은 인증과 스케줄러를 실행하므로 사용하지 않는다. 프론트엔드 테스트는 사용자 요청으로 제거했으며 기본 하네스에는 Node/TypeScript가 필요하지 않다.
 
 ## Tests
 
@@ -102,6 +102,19 @@ uv run --locked python -m tests.live_kis --allow-live --ticker 005930
 ### 후속 결함 수정 검증
 
 같은 Windows 격리 환경에서 1단계는 Queue·수집기 수명주기 관련 18개, 2단계는 Stage 1·2·5 전체 44개를 통과했다. 종료를 기다리는 새 계약에 맞춰 전송 gate를 동시에 해제하도록 테스트를 바꿨으며, 실제 전송 직렬화·완료 후 0.1초·Future 완료 판정은 유지했다. 일봉 반복 검증은 보존구간의 모든 응답 페이지를 제공하고 호출 수를 검증한다. 분봉 변환·MA 실패는 명시적 예외 전파를 요구한다. 최초 실패 기대값을 완화하거나 skip하지 않았다.
+
+3단계 이후 전체 `python -m pytest -q --tb=short` 결과는 다음과 같다. 2026-11-13 Windows / Python 3.12.12 / SQLite 3.50.4에서 24.81초, 누적 peak RSS 118.6MiB였다. 변경한 Python 10개 파일의 Ruff check·format check도 통과했다. 독립 검토에서 발견한 종료 drain 경쟁, 검증 전 중복 제거, 랭킹의 비정상 행 은폐도 회귀 테스트와 함께 수정했다.
+
+| Stage | 실행 | 통과 | 실패 |
+|---|---:|---:|---:|
+| 1 | 8 | 8 | 0 |
+| 2 | 23 | 23 | 0 |
+| 3 | 9 | 9 | 0 |
+| 4 | 49 | 45 | 4 |
+| 5 | 13 | 13 | 0 |
+| 합계 | 102 | 98 | 4 |
+
+오류·스킵은 0이다. 실패는 이번 요청에 포함하지 않은 T12의 일봉/분봉 × above/below 4개이며, 기존 실패를 그대로 노출해 종료 코드는 1이다. 실제 KIS 및 Linux 운영 환경·장시간 자원 검증을 실행한 결과가 아니다.
 
 ### 최초 하네스 결과
 

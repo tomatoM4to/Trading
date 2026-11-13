@@ -156,8 +156,13 @@ def reference(market_data, kind, params, minute=False):
 async def test_volume_peak_breakout_matches_arithmetic_reference(
     market_data, engine, lookback
 ):
+    from schemas.screener import ScreenerRequest
+
     params = {"lookback": lookback}
-    assert await engine._handle_volume_peak_breakout("f", params) == reference(
+    request = ScreenerRequest(
+        filters=[{"id": "f", "type": "volume_peak_breakout", "params": params}]
+    )
+    assert await engine.run_pipeline(request) == reference(
         market_data, "volume_peak_breakout", params, "H" in lookback
     )
 
@@ -193,6 +198,8 @@ async def test_volume_peak_breakout_matches_arithmetic_reference(
 async def test_each_local_filter_matches_arithmetic_reference(
     market_data, engine, minute, kind, values
 ):
+    from schemas.screener import ScreenerRequest
+
     prefix = "ma" if minute else "ma_daily_"
     params = {**values}
     if kind == "ma_cross":
@@ -201,7 +208,9 @@ async def test_each_local_filter_matches_arithmetic_reference(
         params["line"] = f"{prefix}5"
     else:
         params["lines"] = [f"{prefix}5", f"{prefix}20"]
-    actual = await engine.filter_handlers[kind]("f", params)
+    actual = await engine.run_pipeline(
+        ScreenerRequest(filters=[{"id": "f", "type": kind, "params": params}])
+    )
     assert actual == reference(market_data, kind, values, minute)
 
 
@@ -257,9 +266,17 @@ async def test_all_and_or_combinations_match_set_reference(
         assert await engine.run_pipeline(request) == expected
 
 
-async def test_cost_reordering_preserves_eligibility_with_investor_rank(engine):
+@pytest.mark.parametrize("rank_type", ["foreign_net_buy_rank", "inst_net_buy_rank"])
+@pytest.mark.parametrize("blocked", ["halted", "admin"])
+async def test_cost_reordering_preserves_eligibility_with_investor_rank(
+    engine, sandbox, rank_type, blocked
+):
     from schemas.screener import ScreenerRequest
 
+    sandbox.write(
+        "UPDATE stock_codes SET is_halted=?, is_admin_issue=? WHERE ticker='H'",
+        [(int(blocked == "halted"), int(blocked == "admin"))],
+    )
     request = ScreenerRequest(
         filters=[
             {
@@ -267,7 +284,7 @@ async def test_cost_reordering_preserves_eligibility_with_investor_rank(engine):
                 "type": "ma_alignment",
                 "params": {"lines": ["ma_daily_5", "ma_daily_20"], "duration": 1},
             },
-            {"id": "rank", "type": "foreign_net_buy_rank", "params": {"limit": 30}},
+            {"id": "rank", "type": rank_type, "params": {"limit": 30}},
         ],
         operations=["AND"],
     )
@@ -280,8 +297,13 @@ async def test_cost_reordering_preserves_eligibility_with_investor_rank(engine):
     assert optimized == original
 
 
-async def test_sse_broker_error_is_not_successful_empty_result():
-    from fastapi.testclient import TestClient
+@pytest.mark.parametrize(
+    "status,rt_cd",
+    [(200, "1"), (503, "0"), (200, "0")],
+    ids=["broker-error", "http-error", "malformed-output"],
+)
+async def test_sse_broker_error_is_not_successful_empty_result(status, rt_cd):
+    from httpx import ASGITransport, AsyncClient
     from main import app
 
     payload = {
@@ -290,12 +312,81 @@ async def test_sse_broker_error_is_not_successful_empty_result():
         ],
         "operations": [],
     }
-    with FakeTransport([response(rt_cd="1")]):
-        result = TestClient(app).post("/api/screener/run", json=payload)
+    with FakeTransport([response(status=status, rt_cd=rt_cd)]):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://fixture"
+        ) as client:
+            result = await client.post("/api/screener/run", json=payload)
     events = decode_events(result.text)
     assert result.status_code == 200
     assert events[-1]["type"] == "error"
     assert not any(e["type"] == "complete" for e in events)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{}],
+        [{"mksc_shrn_iscd": ""}],
+        [{"mksc_shrn_iscd": 123}],
+        [None],
+        [{"mksc_shrn_iscd": "A"}, {}],
+    ],
+)
+async def test_sse_malformed_rank_rows_cannot_become_successful_empty_result(rows):
+    from httpx import ASGITransport, AsyncClient
+    from main import app
+
+    payload = {
+        "filters": [
+            {"id": "rank", "type": "foreign_net_buy_rank", "params": {"limit": 3}}
+        ]
+    }
+    with FakeTransport([response(rows, output="output")]):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://fixture"
+        ) as client:
+            result = await client.post("/api/screener/run", json=payload)
+    events = decode_events(result.text)
+    assert [
+        event["type"] for event in events if event["type"] in {"complete", "error"}
+    ] == ["error"]
+
+
+@pytest.mark.parametrize("rank_type", ["foreign_net_buy_rank", "inst_net_buy_rank"])
+async def test_sse_empty_investor_rank_is_successful_completion(rank_type):
+    from httpx import ASGITransport, AsyncClient
+    from main import app
+
+    payload = {
+        "filters": [
+            {"id": "rank", "type": "foreign_net_buy_rank", "params": {"limit": 1}}
+        ]
+    }
+    payload["filters"][0]["type"] = rank_type
+    with FakeTransport([response([], output="output")]):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://fixture"
+        ) as client:
+            result = await client.post("/api/screener/run", json=payload)
+    events = decode_events(result.text)
+    assert [event for event in events if event["type"] in {"complete", "error"}] == [
+        {"type": "complete", "items": []}
+    ]
+
+
+@pytest.mark.parametrize("rank_type", ["foreign_net_buy_rank", "inst_net_buy_rank"])
+async def test_standalone_rank_excludes_ineligible_tickers_without_changing_rank(
+    engine, rank_type
+):
+    from schemas.screener import ScreenerRequest
+
+    ranked = [{"mksc_shrn_iscd": ticker} for ticker in ("unknown", "H", "A")]
+    request = ScreenerRequest(
+        filters=[{"id": "rank", "type": rank_type, "params": {"limit": 3}}]
+    )
+    with FakeTransport([response(ranked, output="output")]):
+        assert await engine.run_pipeline(request) == {"A": {"rank": 3.0}}
 
 
 @pytest.mark.parametrize(
@@ -390,6 +481,7 @@ async def test_top_volume_nonempty_database_preserves_public_response(market_dat
         "/market/screener/top-volume"
     )
     assert result.status_code == 200
+    assert result.json()["date"] == str(market_data["A", False][-1][1])
     expected = [
         r
         for (ticker, minute), rows in market_data.items()
