@@ -14,6 +14,45 @@ API_URL = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
 TR_ID = "FHKST03010230"
 
 
+def normalize_minute_page(ticker: str, frame: pd.DataFrame) -> list[dict]:
+    fields = {
+        "date": "stck_bsop_date",
+        "time": "stck_cntg_hour",
+        "open": "stck_oprc",
+        "high": "stck_hgpr",
+        "low": "stck_lwpr",
+        "close": "stck_prpr",
+        "volume": "cntg_vol",
+    }
+    ordered = frame.sort_values(["stck_bsop_date", "stck_cntg_hour"])
+    records = []
+    seen = {}
+    previous_date, previous_amount = None, None
+    for item in ordered.to_dict("records"):
+        row = {key: int(str(item[source])) for key, source in fields.items()}
+        timestamp = f"{row['date']:08d}{row['time']:06d}"
+        datetime.strptime(timestamp, "%Y%m%d%H%M%S")
+        cumulative = item.get("acml_tr_pbmn")
+        cumulative = int(str(cumulative)) if cumulative is not None else None
+        normalized = (row, cumulative)
+        if timestamp in seen:
+            if seen[timestamp] != normalized:
+                raise ValueError("Conflicting duplicate minute candle")
+            continue
+        seen[timestamp] = normalized
+        amount = None
+        if cumulative is not None:
+            if previous_date == row["date"] and previous_amount is not None:
+                amount = cumulative - previous_amount
+            elif row["time"] == 90000:
+                amount = cumulative
+            if cumulative < 0 or (amount is not None and amount < 0):
+                raise ValueError("Invalid cumulative minute amount")
+        records.append({"ticker": ticker, **row, "amount": amount, "dt_str": timestamp})
+        previous_date, previous_amount = row["date"], cumulative
+    return records
+
+
 def get_minute_last_times(markets: list[str] | None = None) -> dict[str, str]:
     """
     DB에서 해당 시장 종목들의 가장 최근 분봉 시간(last_datetime)을 조회합니다.
@@ -167,13 +206,15 @@ async def process_ticker(
                 logger.error(f"Failed to calculate previous date for {ticker}: {e}")
                 break
 
-        # 'datetime' string column for easy comparison
-        df["dt_str"] = df["stck_bsop_date"] + df["stck_cntg_hour"]
+        try:
+            records = normalize_minute_page(ticker, df)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"[{ticker}] Invalid minute OHLCV response") from exc
 
         if newest_dt is None:
-            newest_dt = df["dt_str"].max()
+            newest_dt = records[-1]["dt_str"]
 
-        fetched_min_dt = df["dt_str"].min()
+        fetched_min_dt = records[0]["dt_str"]
         fetched_len = len(df)
 
         # 중복 감지 조기 종료 (Overlap-Aware Early Exit)
@@ -182,53 +223,12 @@ async def process_ticker(
             if fetched_min_dt <= last_datetime:
                 is_overlap = True
 
-            # DB에 이미 있는 시간대 이후의 새로운 데이터만 남김
-            df = df[df["dt_str"] > last_datetime]
-            if df.empty:
-                # 필터링 후 남은 게 없으면 삽입할 필요 없이 바로 탈출
+            records = [row for row in records if row["dt_str"] >= last_datetime]
+            if not records:
                 break
 
-        # DB 스키마에 맞게 컬럼 매핑
-        df_clean = pd.DataFrame()
-        df_clean["ticker"] = [ticker] * len(df)
-        df_clean["date"] = df["stck_bsop_date"]
-        df_clean["time"] = df["stck_cntg_hour"]
-        df_clean["open"] = pd.to_numeric(df["stck_oprc"], errors="coerce")
-        df_clean["high"] = pd.to_numeric(df["stck_hgpr"], errors="coerce")
-        df_clean["low"] = pd.to_numeric(df["stck_lwpr"], errors="coerce")
-        df_clean["close"] = pd.to_numeric(df["stck_prpr"], errors="coerce")
-        df_clean["volume"] = pd.to_numeric(df["cntg_vol"], errors="coerce")
-
-        # 거래대금 차분(diff) 계산
-        if "acml_tr_pbmn" in df.columns:
-            acml_amount = pd.to_numeric(df["acml_tr_pbmn"], errors="coerce")
-            is_same_date = df["stck_bsop_date"] == df["stck_bsop_date"].shift(-1)
-            diff_amount = acml_amount - acml_amount.shift(-1)
-            df_clean["amount"] = diff_amount.where(is_same_date, acml_amount)
-
-            is_last_row = df["stck_bsop_date"].shift(-1).isna()
-            is_0900 = df["stck_cntg_hour"] == "090000"
-            df_clean["amount"] = df_clean["amount"].mask(
-                is_last_row & ~is_0900, df_clean["close"] * df_clean["volume"]
-            )
-        else:
-            df_clean["amount"] = df_clean["close"] * df_clean["volume"]
-
-        df_clean = df_clean.dropna(subset=["date", "time", "close"])
-        if not df_clean.empty:
+        if records:
             success_any = True
-
-            # STRICT INTEGER 컬럼 형변환 보장
-            df_clean["amount"] = df_clean["amount"].fillna(0).astype(int)
-            df_clean["date"] = df_clean["date"].astype(int)
-            df_clean["time"] = df_clean["time"].astype(int)
-            df_clean["open"] = df_clean["open"].astype(int)
-            df_clean["high"] = df_clean["high"].astype(int)
-            df_clean["low"] = df_clean["low"].astype(int)
-            df_clean["close"] = df_clean["close"].astype(int)
-            df_clean["volume"] = df_clean["volume"].astype(int)
-
-            records = df_clean.to_dict("records")
 
             conn = connect_sqlite()
             try:
@@ -274,8 +274,8 @@ async def process_ticker(
             rebuild_minute_ma_for_ticker(conn, ma_conn, ticker)
         except Exception as e:
             ma_conn.rollback()
-            success_any = False
             logger.error(f"[{ticker}] Minute MA rebuild error: {e}")
+            raise
         finally:
             conn.close()
             ma_conn.close()
@@ -342,7 +342,7 @@ async def run_minute_ohlcv_scheduler(
                     success, newest_dt = await process_ticker(
                         ticker, last_datetime, max_steps=15, priority=priority
                     )
-                    if newest_dt:
+                    if success and newest_dt:
                         last_times[ticker] = newest_dt  # 메모리 업데이트
 
                     success_count += 1

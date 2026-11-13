@@ -34,6 +34,8 @@ MA 메모리 DB는 마지막 연결이 닫히면 사라진다. `_keepalive_ma_co
 
 복합 기본 키 `(ticker, date, time)`을 사용한다. `date`는 `YYYYMMDD`, `time`은 `HHMMSS` 형태의 `INTEGER`다. `amount`는 nullable이다.
 
+누적 거래대금의 이전 기준값을 확인할 수 없는 페이지 경계에서는 `amount=NULL`을 사용한다. 원본으로 확인할 수 없는 값을 종가×거래량이나 0으로 대체하지 않는다.
+
 모든 주 테이블은 `WITHOUT ROWID, STRICT`다.
 
 ## MA 테이블

@@ -69,7 +69,6 @@ async def rebuild_ma_database():
                     ma_records,
                 )
                 ma_records.clear()
-            ma_conn.commit()
 
             # 3. 분봉 MA 리빌드 (최근 3일치만 가져와서 연산 - 앞의 199개는 예열용으로 사용됨)
             logger.sched(
@@ -128,11 +127,14 @@ async def rebuild_ma_database():
                         "INSERT OR IGNORE INTO minute_ma VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         ma_records,
                     )
-                ma_conn.commit()
+            ma_conn.commit()
 
             logger.sched("[Bootstrap] MA Database Rebuild Complete.")
         except Exception as e:
+            ma_conn.rollback()
+            ma_calculator.clear()
             logger.error(f"[Bootstrap] Failed to rebuild MA database: {e}")
+            raise
         finally:
             disk_conn.close()
             ma_conn.close()

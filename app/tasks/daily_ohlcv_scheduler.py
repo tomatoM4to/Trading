@@ -11,6 +11,7 @@ logger.setLevel(logging.INFO)
 
 API_URL = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 TR_ID = "FHKST03010100"  # 국내주식기간별시세
+DAILY_HISTORY_RETENTION = 500
 
 
 def rebuild_daily_ma_for_ticker(main_conn, ma_conn, ticker: str) -> None:
@@ -85,7 +86,24 @@ async def process_ticker(
     한 종목에 대해 여러 번 API를 호출하여 충분한 과거 데이터(예: 5번 호출 시 최대 500영업일)를 수집.
     200일 이평선을 과거 시점에서도 계산하려면 최소 400~500 영업일 치의 데이터가 필요함.
     """
+    from core.database import connect_ma_db, connect_sqlite
+
     all_data = []
+    retained_dates = set()
+    if last_date is not None:
+        conn = connect_sqlite()
+        try:
+            retained_dates = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT date FROM daily_ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT ?",
+                    (ticker, DAILY_HISTORY_RETENTION),
+                )
+            }
+        finally:
+            conn.close()
+    repair_history = bool(retained_dates)
+    history_complete = not repair_history
 
     # KIS API는 1회 호출에 최대 100건(영업일)을 반환하므로,
     # 응답으로 온 가장 오래된 날짜의 하루 전을 다음 호출의 종료일로 설정하여 거슬러 올라감.
@@ -108,16 +126,24 @@ async def process_ticker(
         # 가져온 데이터 중 가장 과거 날짜를 찾아서 다음 루프의 end_date로 세팅
         oldest_date_str = min(item.stck_bsop_date for item in valid_items)
 
-        # [스마트 스케줄러] 우리가 가진 DB의 최신 날짜(last_date)와 겹치는 구간(이하)이 확보되면 즉시 과거 역추적 중단
-        if last_date and int(oldest_date_str) <= last_date:
-            break
+        if repair_history:
+            retained_dates.update(int(item.stck_bsop_date) for item in valid_items)
+            retained_dates = set(
+                sorted(retained_dates, reverse=True)[:DAILY_HISTORY_RETENTION]
+            )
+            if int(oldest_date_str) <= min(retained_dates):
+                history_complete = True
+                break
 
         oldest_date = datetime.strptime(oldest_date_str, "%Y%m%d")
         current_end_date = oldest_date - timedelta(days=1)
 
         # 상장한 지 얼마 안 된 종목이라 더 이상 과거 데이터가 안 나오면 중단
-        if len(valid_items) < 10:
+        if not repair_history and len(valid_items) < 10:
             break
+
+    if not history_complete:
+        raise RuntimeError(f"[{ticker}] Daily retained history verification incomplete")
 
     if not all_data:
         return
@@ -141,8 +167,6 @@ async def process_ticker(
     if not processed_data:
         logger.sched(f"[{ticker}] No valid OHLCV data found. Skipping.")
         return True
-
-    from core.database import connect_ma_db, connect_sqlite
 
     # 데이터 프레임 변환 후 시간순(ASC) 정렬
     df = pd.DataFrame(processed_data)

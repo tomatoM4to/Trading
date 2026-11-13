@@ -105,14 +105,16 @@ async def test_daily_cold_duplicate_revision_and_ma(sandbox):
             str(min(row[1] for row in page)), "%Y%m%d"
         ) - timedelta(days=1)
     for _ in range(2):
-        with FakeTransport([response(daily_wire(pages[0]))]):
+        with FakeTransport([response(daily_wire(p)) for p in pages]) as transport:
             await process_ticker("A", last_date=rows[-1][1])
+        assert len(transport.calls) == 3
         assert sandbox.rows("daily_ohlcv") == rows
         assert sandbox.rows("daily_ma") == ma_reference(rows)
     changed = list(rows[-1])
     changed[5] += 1
     rows[-1] = tuple(changed)
-    with FakeTransport([response(daily_wire([changed]))]):
+    pages[0][0] = changed
+    with FakeTransport([response(daily_wire(p)) for p in pages]):
         await process_ticker("A", last_date=changed[1])
     assert sandbox.rows("daily_ohlcv") == rows
     assert sandbox.rows("daily_ma") == ma_reference(rows)
@@ -230,6 +232,43 @@ async def test_minute_increment_preserves_cumulative_baseline(sandbox, candles):
     ]
 
 
+@pytest.mark.parametrize("with_amount", (True, False))
+async def test_minute_amount_without_baseline_is_unknown(sandbox, candles, with_amount):
+    from tasks.minute_ohlcv_scheduler import process_ticker
+
+    raw = copy.deepcopy(candles["minute"][:2])
+    if not with_amount:
+        for row in raw:
+            del row["acml_tr_pbmn"]
+    with FakeTransport([response(raw)]):
+        assert (await process_ticker("A", max_steps=1))[0]
+    expected = copy.deepcopy(candles["minute_expected"][2:])
+    expected[0][-1] = None
+    if not with_amount:
+        expected[1][-1] = None
+    assert sandbox.rows("minute_ohlcv") == [tuple(row) for row in expected]
+
+
+async def test_minute_same_timestamp_revision_recomputes_ma(sandbox):
+    from tasks.minute_ohlcv_scheduler import process_ticker
+
+    rows = minute_series(10)
+    sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    changed = list(rows[-1])
+    changed[6] += 1
+    changed[8] += changed[7]
+    rows[-1] = tuple(changed)
+    raw = minute_wire(rows)[::-1]
+    newest = f"{changed[1]}{changed[2]:06d}"
+    with FakeTransport([response(raw)]):
+        assert await process_ticker("A", last_datetime=newest, max_steps=1) == (
+            True,
+            newest,
+        )
+    assert sandbox.rows("minute_ohlcv") == rows
+    assert sandbox.rows("minute_ma") == ma_reference(rows, minute=True)
+
+
 async def test_minute_page_order_does_not_change_data(sandbox, candles):
     from tasks.minute_ohlcv_scheduler import process_ticker
 
@@ -240,16 +279,37 @@ async def test_minute_page_order_does_not_change_data(sandbox, candles):
     ]
 
 
-async def test_minute_partial_bad_close_must_report_failure(candles):
+async def test_minute_partial_bad_close_must_report_failure(sandbox, candles):
     from tasks.minute_ohlcv_scheduler import process_ticker
 
     bad = copy.deepcopy(candles["minute"])
     bad[1]["stck_prpr"] = "bad-price"
-    with FakeTransport([response(bad)]):
-        success, _ = await process_ticker("A", max_steps=1)
-    assert not success, (
-        "A dropped malformed candle must not be reported as complete collection"
-    )
+    with (
+        FakeTransport([response(bad)]),
+        pytest.raises(ValueError, match="Invalid minute OHLCV response"),
+    ):
+        await process_ticker("A", max_steps=1)
+    assert sandbox.rows("minute_ohlcv") == []
+    assert sandbox.rows("minute_ma") == []
+
+
+@pytest.mark.parametrize("invalid_price", ("bad-price", "121"))
+@pytest.mark.parametrize("reverse", (True, False))
+async def test_minute_conflicting_duplicates_cannot_hide_invalid_rows(
+    sandbox, candles, invalid_price, reverse
+):
+    from tasks.minute_ohlcv_scheduler import process_ticker
+
+    raw = copy.deepcopy(candles["minute"])
+    raw.append({**raw[0], "stck_prpr": invalid_price})
+    if reverse:
+        raw.reverse()
+    with (
+        FakeTransport([response(raw)]),
+        pytest.raises(ValueError, match="Invalid minute OHLCV response"),
+    ):
+        await process_ticker("A", max_steps=1)
+    assert sandbox.rows("minute_ohlcv") == []
 
 
 async def test_minute_ma_retention_has_warmup_for_every_retained_row(sandbox):
@@ -279,3 +339,31 @@ async def test_daily_internal_gap_before_overlap_page_is_recovered(sandbox):
     ):
         await process_ticker("A", last_date=rows[-1][1], target_api_calls=2)
     assert sandbox.rows("daily_ohlcv") == rows
+
+
+async def test_daily_history_verification_cannot_succeed_beyond_request_budget(sandbox):
+    from tasks.daily_ohlcv_scheduler import process_ticker
+
+    rows = daily_series(110)
+    stored = [row for index, row in enumerate(rows) if index != 5]
+    sandbox.write("INSERT INTO daily_ohlcv VALUES (?,?,?,?,?,?,?,?)", stored)
+    with (
+        FakeTransport([response(daily_wire(rows[10:][::-1]))]) as transport,
+        pytest.raises(RuntimeError, match="verification incomplete"),
+    ):
+        await process_ticker("A", last_date=rows[-1][1], target_api_calls=1)
+    assert len(transport.calls) == 1
+    assert sandbox.rows("daily_ohlcv") == stored
+
+
+async def test_daily_new_candle_keeps_history_audit_within_five_pages(sandbox):
+    from tasks.daily_ohlcv_scheduler import process_ticker
+
+    rows = daily_series(501)
+    sandbox.write("INSERT INTO daily_ohlcv VALUES (?,?,?,?,?,?,?,?)", rows[:-1])
+    pages = [rows[end - 100 : end][::-1] for end in range(501, 1, -100)]
+    with FakeTransport([response(daily_wire(page)) for page in pages]) as transport:
+        assert await process_ticker("A", last_date=rows[-2][1])
+    assert len(transport.calls) == 5
+    assert sandbox.rows("daily_ohlcv") == rows
+    assert sandbox.rows("daily_ma") == ma_reference(rows, retention=301)

@@ -153,17 +153,18 @@ async def test_minute_ma_failure_retry_cannot_skip_unbuilt_ma(sandbox):
             "CREATE TRIGGER reject_ma BEFORE INSERT ON minute_ma BEGIN SELECT RAISE(ABORT,'injected MA failure'); END"
         )
         ma.commit()
-        with FakeTransport([response(source["minute"])]):
-            success, newest = await process_ticker("A", max_steps=1)
-        assert not success
-        assert newest == "20261112090300"
+        with (
+            FakeTransport([response(source["minute"])]),
+            pytest.raises(sqlite3.IntegrityError),
+        ):
+            await process_ticker("A", max_steps=1)
         assert sandbox.rows("minute_ohlcv") == [
             tuple(r) for r in source["minute_expected"]
         ]
         ma.execute("DROP TRIGGER reject_ma")
         ma.commit()
         with FakeTransport([response(source["minute"])]):
-            await process_ticker("A", last_datetime=newest, max_steps=1)
+            await process_ticker("A", last_datetime="20261112090300", max_steps=1)
         assert sandbox.rows("minute_ma") == ma_reference(
             source["minute_expected"], minute=True
         )
@@ -183,6 +184,63 @@ async def test_bootstrap_rebuild_failure_is_visible_to_caller(sandbox):
         ma.commit()
         with pytest.raises(sqlite3.IntegrityError):
             await rebuild_ma_database()
+    finally:
+        ma.close()
+
+
+async def test_minute_collector_retries_ma_failure_before_advancing_watermark(sandbox):
+    from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
+
+    sandbox.stock()
+    source = load_fixture("candles.json")
+    ma = database.connect_ma_db()
+    try:
+        ma.execute(
+            "CREATE TRIGGER reject_ma BEFORE INSERT ON minute_ma BEGIN SELECT RAISE(ABORT,'injected MA failure'); END"
+        )
+        ma.commit()
+
+        def recover_ma(call):
+            ma.execute("DROP TRIGGER reject_ma")
+            ma.commit()
+            return response(source["minute"])
+
+        with FakeTransport(
+            [
+                response(source["minute"]),
+                *[response([])] * 14,
+                recover_ma,
+                *[response([])] * 14,
+            ]
+        ) as transport:
+            await run_minute_ohlcv_scheduler(single_cycle=True)
+        assert len(transport.calls) == 30
+        assert sandbox.rows("minute_ma") == ma_reference(
+            source["minute_expected"], minute=True
+        )
+    finally:
+        ma.close()
+
+
+async def test_bootstrap_minute_failure_rolls_back_both_ma_tables(sandbox):
+    from core.bootstrap import rebuild_ma_database
+
+    daily, minute = daily_series(10), minute_series(10)
+    sandbox.write("INSERT INTO daily_ohlcv VALUES (?,?,?,?,?,?,?,?)", daily)
+    sandbox.write("INSERT INTO minute_ohlcv VALUES (?,?,?,?,?,?,?,?,?)", minute)
+    await rebuild_ma_database()
+    before_daily, before_minute = sandbox.rows("daily_ma"), sandbox.rows("minute_ma")
+    sandbox.write("UPDATE daily_ohlcv SET close=close+10")
+    ma = database.connect_ma_db()
+    try:
+        ma.execute(
+            "CREATE TRIGGER reject_rebuild BEFORE INSERT ON minute_ma BEGIN SELECT RAISE(ABORT,'injected rebuild failure'); END"
+        )
+        ma.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            await rebuild_ma_database()
+        assert sandbox.rows("daily_ma") == before_daily
+        assert sandbox.rows("minute_ma") == before_minute
     finally:
         ma.close()
 
