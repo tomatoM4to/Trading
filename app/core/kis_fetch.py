@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 import requests
 from core import kis_auth as ka
@@ -174,7 +175,9 @@ async def start_q_worker():
                 except Exception as e:
                     if not future.done():
                         future.set_exception(e)
-                await asyncio.sleep(KIS_REQUEST_INTERVAL)
+                deadline = time.perf_counter() + KIS_REQUEST_INTERVAL
+                while (remaining := deadline - time.perf_counter()) > 0:
+                    await asyncio.sleep(remaining)
             finally:
                 queue.task_done()
 

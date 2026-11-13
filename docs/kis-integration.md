@@ -24,7 +24,7 @@ KIS 통합은 `app/core/kis_auth.py`의 인증과 `app/core/kis_fetch.py`의 데
 
 - 낮은 priority 숫자가 먼저 처리된다.
 - counter는 동일 우선순위의 FIFO 순서를 보장한다.
-- 각 요청이 끝난 뒤 반드시 `asyncio.sleep(0.1)`한다.
+- 각 요청이 끝난 뒤 최소 0.1초를 기다린다. `perf_counter()` deadline까지 남은 시간을 다시 대기해 Windows asyncio 타이머가 일찍 깨워도 최소 간격을 지킨다.
 - 일반 데이터 요청의 HTTP 타임아웃은 10초다.
 
 현재 목표 처리율은 약 10 req/s다. KIS의 상한보다 보수적으로 운용하며, 이 지연을 임의로 줄이면 안 된다.
