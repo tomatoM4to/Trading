@@ -10,6 +10,16 @@ export interface AggregatedCandle {
   volume: number;
 }
 
+function dailyGroupKey(time: string, timeframe: string): string {
+  const day = time.split(" ")[0];
+  if (timeframe === "1D") return day;
+  if (timeframe === "1M") return day.slice(0, 7);
+  const date = new Date(`${day}T00:00:00Z`);
+  const weekday = date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() - (weekday === 0 ? 6 : weekday - 1));
+  return date.toISOString().slice(0, 10);
+}
+
 /**
  * 1분봉 데이터(ChartDataPoint)를 지정된 분(minutes) 단위 캔들로 그룹핑합니다.
  */
@@ -98,20 +108,7 @@ export function aggregateDailyCandles(
     const dateObj = new Date(point.time.replace(" ", "T") + "+09:00");
     const timestampSec = Math.floor(dateObj.getTime() / 1000) + 9 * 60 * 60;
     
-    let groupKey = "";
-    if (timeframe === "1M") {
-      // 월봉: YYYY-MM
-      const year = dateObj.getFullYear();
-      const month = dateObj.getMonth(); // 0-11
-      groupKey = `${year}-${month}`;
-    } else if (timeframe === "1W") {
-      // 주봉: 월요일 기준 주간 그룹핑
-      const dayOfWeek = dateObj.getDay(); // 0: Sun, 1: Mon, ...
-      const diff = dateObj.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // 월요일로 맞춤
-      const monday = new Date(dateObj.setDate(diff));
-      monday.setHours(0, 0, 0, 0);
-      groupKey = monday.getTime().toString();
-    }
+    const groupKey = dailyGroupKey(point.time, timeframe);
 
     if (!currentCandle || groupKey !== currentGroupKey) {
       if (currentCandle) {
@@ -165,9 +162,6 @@ export function extractLineSeriesData(
 
   for (const point of data) {
     const val = point[key];
-    if (val === null || val === undefined || typeof val !== "number") {
-      continue;
-    }
 
     const dateObj = new Date(point.time.replace(" ", "T") + "+09:00");
     const timestampSec = Math.floor(dateObj.getTime() / 1000) + 9 * 60 * 60;
@@ -176,22 +170,7 @@ export function extractLineSeriesData(
     let gTime: Time = timestampSec as Time;
 
     if (isDailyTF) {
-      if (timeframe === "1D") {
-        groupKey = point.time.split(" ")[0]; // YYYY-MM-DD
-        gTime = timestampSec as Time;
-      } else if (timeframe === "1M") {
-        const year = dateObj.getFullYear();
-        const month = dateObj.getMonth();
-        groupKey = `${year}-${month}`;
-        gTime = timestampSec as Time; // aggregateDailyCandles 에서는 첫날 timestamp 사용
-      } else if (timeframe === "1W") {
-        const dayOfWeek = dateObj.getDay();
-        const diff = dateObj.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-        const monday = new Date(dateObj.setDate(diff));
-        monday.setHours(0, 0, 0, 0);
-        groupKey = monday.getTime().toString();
-        gTime = timestampSec as Time;
-      }
+      groupKey = dailyGroupKey(point.time, timeframe);
     } else {
       const minutes = parseInt(timeframe, 10);
       if (minutes > 1) {
@@ -211,9 +190,10 @@ export function extractLineSeriesData(
       }
       currentGroupKey = groupKey;
       currentGroupTime = gTime;
+      lastValue = null;
     }
     // 그룹의 마지막 값으로 계속 덮어씀
-    lastValue = val;
+    if (typeof val === "number") lastValue = val;
   }
 
   // 마지막 꼬리 데이터 밀어넣기

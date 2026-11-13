@@ -45,6 +45,8 @@ KIS API에서 삼성전자 최근 약 100일 일봉을 직접 조회하는 진�
 
 응답은 ticker, 이름과 OHLCV·MA 배열이다. 분봉 응답은 분봉 MA와 해당 시점의 일봉 MA를 함께 제공하고, 일봉 응답은 일봉 MA 필드를 제공한다.
 
+프론트엔드 주·월봉은 입력의 KST 거래일로 그룹을 정한다. 주봉은 월요일 시작이며 브라우저 시간대에 영향을 받지 않는다. 캔들과 MA는 같은 첫 거래일 timestamp를 사용하고 그룹 안의 마지막 유효 MA를 선택한다. `cd web; npm run test:chart`로 Node 회귀를 실행한다.
+
 ## 스크리너 API
 
 ### `POST /api/screener/run`
