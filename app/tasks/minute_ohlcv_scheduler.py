@@ -361,9 +361,12 @@ async def run_minute_ohlcv_scheduler(
                     w_queue.task_done()
 
         workers = [asyncio.create_task(worker(queue)) for _ in range(50)]
-        await queue.join()
-        for w in workers:
-            w.cancel()
+        try:
+            await queue.join()
+        finally:
+            for worker_task in workers:
+                worker_task.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
 
         logger.sched(
             f"[SCHED] Cycle Finished. Success: {success_count}, Fail: {fail_count}."

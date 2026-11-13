@@ -111,10 +111,17 @@ async def test_stop_resolves_active_and_waiting_callers():
             await entered(transport)
             tasks.append(asyncio.create_task(submit("waiting")))
             await asyncio.sleep(0)
-            await stop_q_worker()
+            stopping = asyncio.create_task(stop_q_worker())
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not stopping.done()
             gate.set()
-            await asyncio.sleep(0.02)
+            await asyncio.wait_for(stopping, 2)
+            await asyncio.gather(*tasks, return_exceptions=True)
             resolved = [task.done() for task in tasks]
+            assert tasks[0].result().is_ok()
+            assert tasks[1].cancelled()
+            assert [c.params["label"] for c in transport.calls] == ["active"]
         finally:
             gate.set()
             await cancel_all(tasks)
@@ -130,11 +137,16 @@ async def test_restart_does_not_overlap_still_running_transport():
         try:
             tasks.append(asyncio.create_task(submit("old")))
             await entered(transport)
-            await stop_q_worker()
-            await start_q_worker()
-            tasks.append(asyncio.create_task(submit("new")))
+            stopping = asyncio.create_task(stop_q_worker())
+            await asyncio.sleep(0)
+            restarting = asyncio.create_task(start_q_worker())
             await asyncio.sleep(0.15)
+            assert len(transport.calls) == 1
+            assert not stopping.done()
+            assert not restarting.done()
             gate.set()
+            await asyncio.wait_for(asyncio.gather(stopping, restarting), 2)
+            tasks.append(asyncio.create_task(submit("new")))
             await asyncio.wait_for(tasks[-1], 2)
             await asyncio.to_thread(gate.wait, 1)
             for _ in range(100):
@@ -155,6 +167,55 @@ async def test_idle_stop_restart_and_new_request():
     await stop_q_worker()
     with FakeTransport([response()]):
         assert (await submit("restarted")).is_ok()
+
+
+async def test_cancelled_stop_caller_cannot_abort_shutdown_or_admit_requests():
+    from core.kis_fetch import start_q_worker, stop_q_worker
+
+    gate = threading.Event()
+    tasks = []
+    with FakeTransport([response()] * 2, gate=gate) as transport:
+        try:
+            tasks.append(asyncio.create_task(submit("active")))
+            await entered(transport)
+            stopping = asyncio.create_task(stop_q_worker())
+            await asyncio.sleep(0)
+            with pytest.raises(RuntimeError, match="stopping"):
+                await submit("rejected")
+            stopping.cancel()
+            await asyncio.gather(stopping, return_exceptions=True)
+            another_stop = asyncio.create_task(stop_q_worker())
+            tasks.append(another_stop)
+            restarting = asyncio.create_task(start_q_worker())
+            tasks.append(restarting)
+            await asyncio.sleep(0)
+            assert not another_stop.done()
+            assert not restarting.done()
+            gate.set()
+            await asyncio.wait_for(asyncio.gather(*tasks), 2)
+            assert (await submit("after-stop")).is_ok()
+        finally:
+            gate.set()
+            await cancel_all(tasks)
+    assert [call.params["label"] for call in transport.calls] == [
+        "active",
+        "after-stop",
+    ]
+    assert transport.calls[1].start - transport.calls[0].end >= 0.1
+
+
+async def test_stop_cancels_queued_request_before_idle_consumer_resumes():
+    from core.kis_fetch import start_q_worker, stop_q_worker
+
+    await start_q_worker()
+    await asyncio.sleep(0)
+    with FakeTransport([]) as transport:
+        waiting = asyncio.create_task(submit("queued"))
+        await asyncio.sleep(0)
+        await stop_q_worker()
+        await asyncio.gather(waiting, return_exceptions=True)
+    assert waiting.cancelled()
+    assert transport.calls == []
 
 
 def test_auth_failure_and_cache_expiration_use_real_auth_boundary(sandbox):

@@ -255,12 +255,12 @@ async def run_daily_ohlcv_scheduler(market: str = "KOSPI"):
     num_workers = 100
     workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
 
-    # 모든 작업이 끝날 때까지 대기
-    await queue.join()
-
-    # 작업 완료 후 워커 종료
-    for w in workers:
-        w.cancel()
+    try:
+        await queue.join()
+    finally:
+        for worker_task in workers:
+            worker_task.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
     elapsed_time = datetime.now() - start_time
 

@@ -33,10 +33,11 @@ KIS 통합은 `app/core/kis_auth.py`의 인증과 `app/core/kis_fetch.py`의 데
 
 - 시작: FastAPI lifespan의 `start_q_worker()`
 - 지연 시작: 큐가 없는 상태에서 `async_kis_fetch()`가 호출돼도 자동 시작
-- 종료: lifespan의 `stop_q_worker()`가 태스크를 cancel하고 종료를 기다림
-- 종료 후 큐와 워커 참조를 함께 초기화하며 idle 상태의 재시작은 테스트에서 통과함
+- 종료: `stop_q_worker()`는 신규 요청을 거부하고 미전송 Future를 취소한다. 이미 시작한 HTTP 요청은 결과 또는 예외로 완료하며, 이후 0.1초 대기까지 끝낸 뒤 종료 신호를 소비한다.
+- `start_q_worker()`는 진행 중인 종료가 끝나야 새 큐와 워커를 만든다. 종료 호출자가 취소돼도 공유 종료 태스크는 `asyncio.shield()`로 유지한다.
+- 미전송 요청의 Future가 이미 취소됐다면 전송하지 않는다. 종료 후 큐·워커·종료 태스크 참조를 함께 초기화한다.
 
-전송 중 종료·재시작은 idle 재시작과 다르다. 실행 중 `to_thread` 전송의 중첩과 응답 Future 미완료를 [Stage 3](testing.md)에서 재현했다. 현재 구현의 안전성 한계는 [T06–T08](test-defects.md#t06--queue-대기-중-취소한-요청도-전송)을 따른다.
+전송 중 종료·동시 재시작·종료 호출자 취소와 수집기 취소는 [Stage 3·5](testing.md)에서 격리 전송으로 검증한다. 종료는 일반 HTTP 10초 타임아웃과 완료 후 대기를 기다릴 수 있다. 취소 전파와 큐 완료 처리는 [Python asyncio 태스크](https://docs.python.org/3.12/library/asyncio-task.html), [Queue](https://docs.python.org/3.12/library/asyncio-queue.html)의 계약을 따른다.
 
 ## 응답 래퍼
 

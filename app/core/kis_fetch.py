@@ -139,7 +139,9 @@ class APIResp:
 # -------------------------------------------------------------------------
 _kis_queue: asyncio.PriorityQueue | None = None
 _kis_worker_task: asyncio.Task | None = None
+_kis_stop_task: asyncio.Task | None = None
 _kis_task_counter: int = 0
+KIS_REQUEST_INTERVAL = 0.1
 
 
 async def start_q_worker():
@@ -148,65 +150,68 @@ async def start_q_worker():
     """
     global _kis_queue, _kis_worker_task
 
+    if _kis_stop_task is not None:
+        await asyncio.shield(_kis_stop_task)
+    if _kis_worker_task is not None and not _kis_worker_task.done():
+        return
+
+    queue = asyncio.PriorityQueue()
+
     async def request_consumer():
-        """
-        큐에서 이벤트를 꺼내 비동기(쓰레드풀)로 API를 요청하고,
-        무조건 0.05초 대기하여 Rate Limit을 방어합니다.
-        """
         while True:
+            _, _, payload = await queue.get()
             try:
-                item = await _kis_queue.get()
-                priority, _counter, payload = item
+                if payload is None:
+                    return
                 future, request_kwargs = payload
+                if future.cancelled():
+                    continue
 
                 try:
-                    # 동기 requests가 이벤트 루프를 블로킹하지 않도록 분리 실행
                     res = await asyncio.to_thread(_do_fetch, **request_kwargs)
                     if not future.done():
                         future.set_result(res)
                 except Exception as e:
                     if not future.done():
                         future.set_exception(e)
-                finally:
-                    _kis_queue.task_done()
+                await asyncio.sleep(KIS_REQUEST_INTERVAL)
+            finally:
+                queue.task_done()
 
-                # 2026.04 KIS 공식 가이드 반영: 동시 호출 시 100ms ~ 150ms 텀 권장
-                await asyncio.sleep(0.1)
-
-            except asyncio.CancelledError:
-                getattr(logger, "sched", logger.info)(
-                    "[KIS Async Worker] Worker task cancelled."
-                )
-                break
-            except Exception as e:
-                logger.error(
-                    "[KIS Async Worker] Unexpected error in consumer loop: %s", e
-                )
-
-    if _kis_worker_task is None or _kis_worker_task.done():
-        if _kis_queue is None:
-            _kis_queue = asyncio.PriorityQueue()
-        _kis_worker_task = asyncio.create_task(request_consumer())
-        getattr(logger, "sched", logger.info)(
-            "[KIS Async Worker] Started background worker (Target: %s req/sec)",
-            1 / 0.1,
-        )
+    _kis_queue = queue
+    _kis_worker_task = asyncio.create_task(request_consumer())
+    getattr(logger, "sched", logger.info)(
+        "[KIS Async Worker] Started background worker (Target: %s req/sec)",
+        1 / KIS_REQUEST_INTERVAL,
+    )
 
 
 async def stop_q_worker():
     """앱 종료 시 백그라운드 워커를 안전하게 종료합니다."""
-    global _kis_queue, _kis_worker_task
-    if _kis_worker_task is not None:
-        _kis_worker_task.cancel()
+    global _kis_stop_task
+    if _kis_worker_task is None:
+        return
+
+    async def finish_stop(worker):
+        global _kis_queue, _kis_worker_task, _kis_stop_task
         try:
-            await _kis_worker_task
-        except asyncio.CancelledError:
-            pass
-        _kis_worker_task = None
-        _kis_queue = None
+            await worker
+        finally:
+            _kis_worker_task = None
+            _kis_queue = None
+            _kis_stop_task = None
         getattr(logger, "sched", logger.info)(
             "[KIS Async Worker] Worker task stopped safely."
         )
+
+    if _kis_stop_task is None:
+        while not _kis_queue.empty():
+            _, _, payload = _kis_queue.get_nowait()
+            payload[0].cancel()
+            _kis_queue.task_done()
+        _kis_queue.put_nowait((0, 0, None))
+        _kis_stop_task = asyncio.create_task(finish_stop(_kis_worker_task))
+    await asyncio.shield(_kis_stop_task)
 
 
 def _do_fetch(
@@ -264,6 +269,8 @@ async def async_kis_fetch(
     요청 정보와 약속 어음(Future)을 Queue에 넣고 대기합니다.
     """
     global _kis_queue, _kis_task_counter
+    if _kis_stop_task is not None:
+        raise RuntimeError("KIS request worker is stopping")
     if _kis_queue is None:
         await start_q_worker()
 
