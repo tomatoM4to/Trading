@@ -314,7 +314,9 @@ class ScreenerEngine:
                 s.market,
                 s.market_cap,
                 (SELECT close FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as close,
-                (SELECT amount FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as amount,
+                (SELECT cumulative_amount FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as amount,
+                (SELECT printf('%04d-%02d-%02d %02d:%02d:%02d', date/10000, date/100%100, date%100, time/10000, time/100%100, time%100)
+                 FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as amount_asof,
                 (
                     SELECT d.close
                     FROM daily_ohlcv d
@@ -331,7 +333,16 @@ class ScreenerEngine:
 
             results = []
             for r in rows:
-                ticker_code, name, market, market_cap, close, amount, prev_close = r
+                (
+                    ticker_code,
+                    name,
+                    market,
+                    market_cap,
+                    close,
+                    amount,
+                    amount_asof,
+                    prev_close,
+                ) = r
 
                 change_rate = None
                 if close is not None and prev_close is not None and prev_close != 0:
@@ -345,6 +356,7 @@ class ScreenerEngine:
                         "market_cap": market_cap,
                         "close": close,
                         "amount": amount,
+                        "amount_asof": amount_asof,
                         "change_rate": change_rate,
                         "filter_values": tickers.get(ticker_code, {}),
                     }

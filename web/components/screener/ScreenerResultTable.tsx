@@ -16,6 +16,7 @@ export interface ScreenerResult {
   market_cap?: number | null;
   close?: number | null;
   amount?: number | null;
+  amount_asof?: string | null;
   change_rate?: number | null;
   filter_values?: Record<string, number>;
   ranks?: Record<string, number>;
@@ -198,7 +199,7 @@ export function ScreenerResultTable({ results, onRowClick, filters = [], viewMod
                           ? `${row.change_rate > 0 ? "+" : ""}${row.change_rate}%` 
                           : "-"}
                       </TableCell>
-                      <TableCell className="text-right hidden sm:table-cell text-muted-foreground font-medium">
+                      <TableCell className="text-right hidden sm:table-cell text-muted-foreground font-medium" title={row.amount_asof ? `${row.amount_asof} KST 기준 누적 거래대금` : undefined}>
                         {formatKoreanCurrency(row.amount)}
                       </TableCell>
                       <TableCell className="text-right hidden md:table-cell text-muted-foreground font-medium">

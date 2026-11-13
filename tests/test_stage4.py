@@ -18,6 +18,22 @@ def decode_events(text):
 pytestmark = pytest.mark.stage4
 
 
+@pytest.mark.parametrize("cumulative", [1122, None])
+def test_screener_amount_is_latest_session_cumulative_even_with_missing_minutes(
+    sandbox, cumulative
+):
+    from services.screener_service import ScreenerEngine
+
+    sandbox.stock("snapshot")
+    sandbox.write(
+        "INSERT INTO minute_ohlcv (ticker,date,time,open,high,low,close,volume,amount,cumulative_amount) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [("snapshot", 20261109, 153000, 100, 123, 90, 120, 4, None, cumulative)],
+    )
+    item = ScreenerEngine().get_ticker_names({"snapshot": {}})[0]
+    assert item["amount"] == cumulative
+    assert item["amount_asof"] == "2026-11-09 15:30:00"
+
+
 def test_admin_test_routes_are_removed_but_live_routes_remain():
     from main import app
 
