@@ -130,6 +130,7 @@ class SystemScheduler:
             raise
         except Exception as e:
             logger.error("Background auth refresh failed: %s", e)
+            raise
 
     async def refresh_stock_codes_job(self) -> None:
         """종목 마스터 데이터를 갱신하는 스케줄러 Job."""
@@ -155,17 +156,19 @@ class SystemScheduler:
 
     async def start_minute_scheduler_job(self) -> None:
         """장중 분봉 수집 스케줄러를 시작하는 Job."""
-        from tasks.minute_ohlcv_scheduler import run_minute_ohlcv_scheduler
+        from tasks.minute_ohlcv_scheduler import start_minute_scheduler_task
 
         try:
             logger.sched("Starting scheduled minute OHLCV collector...")
             # 분봉 수집기는 15:55까지 무한루프를 돌며 작동함
-            await run_minute_ohlcv_scheduler()
+            task = await start_minute_scheduler_task()
+            await asyncio.shield(task)
             logger.sched("Scheduled minute OHLCV collector finished naturally.")
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.error("Scheduled minute OHLCV collector failed: %s", e)
+            raise
 
     async def cleanup_ohlcv_job(self) -> None:
         """새벽 4시(04:00) 일봉/분봉 지능형 가비지 컬렉션 (Intelligent GC).

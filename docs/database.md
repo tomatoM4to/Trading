@@ -1,83 +1,101 @@
-# 데이터베이스와 메모리 모델
+# Overview
 
-## 저장 계층
+- 디스크 SQLite에 정본을, Shared In-Memory SQLite에 MA를 두어 데이터 중복과 반복 계산을 줄인다.
+- MA 소실은 보존된 OHLCV에서 복구해 외부 재수집 비용을 피한다.
 
-시스템은 주 데이터용 디스크 SQLite와 이동평균 전용 Shared In-Memory SQLite를 사용한다.
+# Checkpoints
 
-디스크 DB는 서비스가 조회하는 canonical 데이터지만 KIS 원본에서 다시 만들 수 있는 재구축 가능한 로컬 저장소다. DB 삭제는 애플리케이션을 정상 종료한 상태에서만 수행하며, 삭제 후에는 콜드 스타트가 끝날 때까지 데이터와 MA가 단계적으로 준비된다. 배포 전 사본은 필수 영속 백업이 아니라 외부 API 장애나 신규 코드 실패 시 빠르게 되돌리기 위한 안전망이다.
+- 전 종목 검색은 사전 계산 MA를, 단일 종목 차트는 디스크 SQL 윈도를 사용해 조회 규모에 맞게 계산 비용을 배분한다. [측정 근거](benchmark.md#저장-계층-분리-기록)
+- MA 기간 부족은 `NULL`로 두어 준비되지 않은 값을 유효한 지표로 취급하지 않는다. [계산 계약](../app/core/ma_calculator.py)
+- 일봉 MA 301행·분봉 MA 391행은 최대 300봉·390봉 조건과 직전 교차 비교를 위한 보존량이다. [검색 계약](screener.md)
+- 종목별 분봉 갱신은 `391 + 200 - 1 = 590`개 원본으로 첫 보존 행의 MA200까지 예열한다. [종목별 재계산](../app/tasks/minute_ohlcv_scheduler.py)
+- 전체 분봉 재구축은 DB 전체의 최신 3개 날짜를 사용하므로 거래가 드문 종목의 590봉 확보를 보장하지 않는다. [전체 재구축](../app/core/bootstrap.py)
+- 디스크와 MA는 별도 commit이며, 정본 저장 후 MA 실패는 해당 종목을 미준비로 남겨 재시도한다. [실패 상태](../app/core/state.py)
+- 재수집 후 MA는 정본에서 다시 계산해 중복 입력에 따른 지표 변화를 막는다. [멱등성 검증](../tests/test_stage2.py)
+- 전체 재구축은 디스크 snapshot과 두 MA 테이블의 교체 트랜잭션을 사용하며, 트랜잭션 내부 오류는 함께 롤백한다. [재구축 구현](../app/core/bootstrap.py)
+- 재구축 호출자 취소는 스레드 종료를 기다린 뒤 미준비로 표시하며, 대기 중 MA commit이 끝날 수 있다. [취소 경계](../app/core/bootstrap.py)
+- 재구축 시작 이후 생긴 종목 실패는 실패 세대로 구별해 과거 snapshot의 성공으로 지우지 않는다. [복구 검증](../tests/test_stage5.py)
+- 분봉 대금의 차분 근거가 없으면 `NULL`로 두고, 원본 누적값을 보존해 재수집 시 교정한다. [수집 계약](scheduler.md)
+- `STRICT`와 복합 키로 타입과 캔들 식별을 검사하며, 종목 마스터와의 관계는 외래 키로 강제하지 않는다. [스키마](../app/core/database.py)
+- MA keep-alive는 프로세스가 소유하고 일반 연결은 `finally`에서 닫아 메모리 DB 소실과 연결 누수를 막는다. [연결 수명](../app/core/database.py)
+- 디스크 연결의 `uri=True`와 ATTACH 값 바인딩으로 플랫폼별 URI 해석 차이를 제거한다. [재현 근거](testing.md#과거-검증-기록)
+- WAL·`synchronous=NORMAL`은 읽기 공존과 쓰기 비용을 절충하며 전원 장애 시 최근 commit의 내구성을 보장하지 않는다. [SQLite 계약](https://www.sqlite.org/pragma.html#pragma_synchronous)
+- 운영 동기화는 PASSIVE 체크포인트이며, 정상 반환이 WAL 완전 반영을 뜻하지 않는다. 명시적 메모리 backup은 테스트 경로다. [구현](../app/core/database.py), [SQLite 계약](https://www.sqlite.org/pragma.html#pragma_wal_checkpoint)
 
-| 저장소 | URI/경로 | 역할 |
-|---|---|---|
-| 디스크 DB | `data/trading.db` 또는 `SQLITE_DB_PATH` | 종목 마스터와 OHLCV 정본 |
-| MA 메모리 DB | `file:ma_db?mode=memory&cache=shared` | 사전 계산 이동평균 |
+# Diagrams
 
-MA 메모리 DB는 마지막 연결이 닫히면 사라진다. `_keepalive_ma_conn`은 프로세스 수명 동안 MA DB를 유지하므로 제거하면 안 된다. `test_mem_var`로 만든 테스트 DB는 테스트가 별도 keep-alive 연결을 소유한다.
+## 데이터 소유권과 파생 관계 - 클래스 다이어그램
 
-## 시작과 동기화
-
-`init_sqlite_connection()`은 디스크 DB에 직접 연결해 WAL과 주 데이터 스키마를 보장하고, 별도로 MA Shared In-Memory DB와 keep-alive 연결을 생성한다. 이후 `connect_sqlite()`가 만드는 일반 연결은 계속 디스크 정본을 가리킨다.
-
-호환 이름인 `sync_memory_to_disk()`는 운영 경로에서 디스크 정본의 WAL을 체크포인트한다. 관리자 통합 테스트가 `mem_conn`을 명시적으로 전달한 경우에만 테스트 메모리 DB를 `test_db_var` 파일로 backup한다. 디스크 연결에는 WAL과 `synchronous=NORMAL`을 적용한다.
-백업 실패는 로그를 남긴 뒤 호출자에게 예외를 다시 전달하므로 스케줄러와 관리자 작업이 성공으로 오인하지 않는다.
-
-## 주 테이블
-
-### `stock_codes`
-
-종목 코드, 이름, 시장, 시가총액·주식수·재무 지표와 거래정지·관리·과열·경고 상태를 보관한다. 기본 키는 `ticker`다.
-
-### `daily_ohlcv`
-
-복합 기본 키 `(ticker, date)`를 사용한다. `date`, 가격, 거래량, 거래대금은 `INTEGER`다.
-
-### `minute_ohlcv`
-
-복합 기본 키 `(ticker, date, time)`을 사용한다. `date`는 `YYYYMMDD`, `time`은 `HHMMSS` 형태의 `INTEGER`다. `amount`는 nullable이다.
-
-모든 주 테이블은 `WITHOUT ROWID, STRICT`다.
-
-## MA 테이블
-
-`daily_ma`와 `minute_ma`는 MA 전용 메모리 DB에만 존재한다.
-
-- 공통 컬럼: `ma5`, `ma10`, `ma20`, `ma60`, `ma120`, `ma200`
-- `daily_ma` 기본 키: `(ticker, date)`
-- `minute_ma` 기본 키: `(ticker, date, time)`
-- 값은 `REAL`, 준비되지 않은 기간은 `NULL`
-- `daily_ma`는 스크리너 최대 300봉과 교차 직전 봉을 위해 종목당 최신 301개를 유지한다.
-- `minute_ma`는 최대 390봉과 교차 직전 봉을 위해 종목당 최신 391개를 유지한다.
-
-`MACalculator`는 종목별 `deque(maxlen=200)`를 사용한다. 부트스트랩은 보존된 OHLCV를 종목별 시간 오름차순으로 순회해 200일·200분선까지 계산한 다음 결과 테이블만 위 상한으로 정리한다.
-
-장중 분봉 수집은 API 페이지를 받은 순서대로 상태형 계산기에 누적하지 않는다. 최신 391개 결과의 첫 행에도 최대 200분선을 계산할 수 있도록 종목별 수집 완료 후 canonical OHLCV 최신 590개(`391 + 200 - 1`)를 시간순으로 읽고, 로컬 계산기로 재계산한 뒤 해당 종목의 `minute_ma`를 교체한다. 일봉 수집도 중복 범위 upsert 후 해당 종목의 canonical OHLCV에서 다시 계산해 멱등성을 보장한다.
-
-MA 기간에 필요한 캔들이 부족하면 해당 컬럼은 `NULL`이다. 스크리너는 `IS NOT NULL` 조건으로 그 종목만 제외하며 요청 전체를 오류로 처리하지 않는다. 차트는 OHLCV와 함께 계산 불가능한 MA 값을 `null`로 반환한다.
-
-## 연결 수명주기
-
-Python의 `with sqlite3.connect(...)`는 트랜잭션만 관리하고 연결을 닫지 않는다. 모든 독립 연결은 다음 형태를 지킨다.
-
-```python
-conn = connect_sqlite()
-try:
-    ...
-finally:
-    conn.close()
+```mermaid
+classDiagram
+    direction LR
+    namespace Disk_SQLite {
+        class StockCodes {
+            ticker PK
+            market
+            eligibility
+        }
+        class DailyOHLCV {
+            ticker_date PK
+            integer OHLCV
+            integer amount
+        }
+        class DailyCollectionState {
+            ticker PK
+            fingerprint
+        }
+        class MinuteOHLCV {
+            ticker_date_time PK
+            integer OHLCV
+            nullable amount
+            nullable cumulative_amount
+        }
+    }
+    namespace Shared_Memory_SQLite {
+        class DailyMA {
+            ticker_date PK
+            nullable ma5_to_ma200
+            retention 301
+        }
+        class MinuteMA {
+            ticker_date_time PK
+            nullable ma5_to_ma200
+            retention 391
+        }
+    }
+    StockCodes "1" --> "0..*" DailyOHLCV : ticker로 조회
+    StockCodes "1" --> "0..*" MinuteOHLCV : ticker로 조회
+    DailyCollectionState ..> DailyOHLCV : 최신 500봉 검증 상태
+    DailyMA ..> DailyOHLCV : 정본에서 재계산
+    MinuteMA ..> MinuteOHLCV : 종목 갱신 590봉 / 전체 재구축 최근 3개 날짜
 ```
 
-FastAPI 요청에서는 `get_db()`와 `get_ma_db()` dependency가 같은 원칙으로 연결을 닫는다.
+## 종목 단위 저장과 복구 - 시퀀스 다이어그램
 
-## 테스트 DB 라우팅
+```mermaid
+sequenceDiagram
+    participant C as 수집기
+    participant D as 디스크 정본
+    participant M as MA DB
+    participant S as 준비 상태
+    C->>D: 검증된 OHLCV upsert / commit
+    C->>D: 해당 종목의 시간순 정본 조회
+    C->>M: 계산 결과 교체
+    alt MA commit 성공
+        C->>S: 해당 종목 실패 해제
+    else MA 갱신 실패
+        C->>M: rollback
+        C->>S: 해당 종목 미준비 기록
+        Note over D,S: 정본은 남고 스크리너는 실패 상태를 확인
+        C->>D: 재시도에서 정본 재조회
+        C->>M: MA 재계산·교체
+    end
+```
 
-`test_db_var`는 현재 비동기 컨텍스트에만 DB 파일 경로를 덮어쓴다. 관리자 통합 검증은 이를 사용해 운영 DB 대신 `test_trading.db`로 라우팅하고 작업이 끝나면 ContextVar 토큰을 반드시 reset한다.
+# Tests
 
-`test_mem_var`는 테스트 전용 메모리 URI를 우선 적용한다. 동적 메모리 테스트에서는 별도 keep-alive 연결이 필요하다.
+- [Stage 1](../tests/test_stage1.py): 모든 MA 창의 독립 분수 계산, 기간 부족, STRICT·PK·rollback, 디스크/MA/스레드 격리와 연결 수명.
+- [Stage 2](../tests/test_stage2.py): 재수집 전후 전체 OHLCV와 보존 MA의 일치, NULL 대금의 보존·교정.
+- [Stage 5](../tests/test_stage5.py): commit 전후 프로세스 종료, MA 소실 후 복구, MA 교체 실패와 재시도, WAL reader와 쓰기 잠금.
 
-## 쿼리 원칙
-
-- 값은 `?` placeholder로 바인딩한다.
-- 동적 컬럼은 정적 화이트리스트에서만 고른다.
-- 전 종목 스크리너는 MA 테이블의 사전 계산 값을 사용한다.
-- 단일 종목 차트는 제한된 행을 대상으로 윈도 함수를 사용할 수 있다.
-- 날짜와 시간은 DB 입력 전에 `int`로 변환한다.
-- 임시 테이블은 `PRAGMA temp_store=MEMORY` 설정을 전제로 한다.
+검증 환경과 실행 명령은 [정합성 테스트](testing.md)에 둔다. 위 테스트의 성공을 두 저장소의 전역 원자성이나 저장장치 장애 검증으로 확대하지 않는다.

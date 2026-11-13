@@ -1,4 +1,4 @@
-name: Project Name
+name: Test and Deploy
 
 on:
   push:
@@ -9,8 +9,42 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # 1단계: 이미지 빌드 및 푸시
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build backend test image
+        run: docker build -f Dockerfile.test -t trading-tests .
+
+      - name: Run isolated backend tests
+        run: >-
+          docker run --rm --cpus=1 --memory=1g --network=none --read-only
+          --tmpfs /tmp:rw,size=512m trading-tests
+          python -m pytest -q --tb=short -p no:cacheprovider
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run chart tests
+        working-directory: web
+        run: npm run test:chart
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,7 +83,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # 2단계: OCI 서버에 배포
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest

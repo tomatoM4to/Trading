@@ -6,12 +6,60 @@ import pandas as pd
 from core.database import MINUTE_MA_RETENTION, connect_ma_db, connect_sqlite
 from core.kis_fetch import async_kis_fetch
 from core.ma_calculator import MACalculator
+from core.state import system_state
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 API_URL = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
 TR_ID = "FHKST03010230"
+
+
+def normalize_minute_page(ticker: str, frame: pd.DataFrame) -> list[dict]:
+    fields = {
+        "date": "stck_bsop_date",
+        "time": "stck_cntg_hour",
+        "open": "stck_oprc",
+        "high": "stck_hgpr",
+        "low": "stck_lwpr",
+        "close": "stck_prpr",
+        "volume": "cntg_vol",
+    }
+    ordered = frame.sort_values(["stck_bsop_date", "stck_cntg_hour"])
+    records = []
+    seen = {}
+    previous_date, previous_amount = None, None
+    for item in ordered.to_dict("records"):
+        row = {key: int(str(item[source])) for key, source in fields.items()}
+        timestamp = f"{row['date']:08d}{row['time']:06d}"
+        datetime.strptime(timestamp, "%Y%m%d%H%M%S")
+        cumulative = item.get("acml_tr_pbmn")
+        cumulative = int(str(cumulative)) if cumulative is not None else None
+        normalized = (row, cumulative)
+        if timestamp in seen:
+            if seen[timestamp] != normalized:
+                raise ValueError("Conflicting duplicate minute candle")
+            continue
+        seen[timestamp] = normalized
+        amount = None
+        if cumulative is not None:
+            if previous_date == row["date"] and previous_amount is not None:
+                amount = cumulative - previous_amount
+            elif row["time"] == 90000:
+                amount = cumulative
+            if cumulative < 0 or (amount is not None and amount < 0):
+                raise ValueError("Invalid cumulative minute amount")
+        records.append(
+            {
+                "ticker": ticker,
+                **row,
+                "amount": amount,
+                "cumulative_amount": cumulative,
+                "dt_str": timestamp,
+            }
+        )
+        previous_date, previous_amount = row["date"], cumulative
+    return records
 
 
 def get_minute_last_times(markets: list[str] | None = None) -> dict[str, str]:
@@ -41,7 +89,7 @@ def get_minute_last_times(markets: list[str] | None = None) -> dict[str, str]:
         return last_times
     except Exception as e:
         logger.error(f"Failed to fetch last times from DB: {e}")
-        return {}
+        raise
     finally:
         conn.close()
 
@@ -146,141 +194,158 @@ async def process_ticker(
     success_any = False
     newest_dt: str | None = None
 
-    # 최대 max_steps 번 연속 조회
-    for _ in range(max_steps):
-        if target_date < cutoff_date:
-            break
-
-        df = await fetch_minute_data(
-            ticker, target_date, target_time, priority=priority
-        )
-        if df.empty:
-            # 엣지 케이스: 야간(예: 새벽 1시)이나 휴일 등 해당 일자에 데이터가 아예 없는 경우
-            # 루프를 종료하지 않고 전날 장 마감 시간(15:30)으로 셋팅하여 계속 탐색
-            try:
-                curr_date = datetime.strptime(target_date, "%Y%m%d")
-                prev_date = curr_date - timedelta(days=1)
-                target_date = prev_date.strftime("%Y%m%d")
-                target_time = "153000"
-                continue
-            except Exception as e:
-                logger.error(f"Failed to calculate previous date for {ticker}: {e}")
+    try:
+        # 최대 max_steps 번 연속 조회
+        for _ in range(max_steps):
+            if target_date < cutoff_date:
                 break
 
-        # 'datetime' string column for easy comparison
-        df["dt_str"] = df["stck_bsop_date"] + df["stck_cntg_hour"]
-
-        if newest_dt is None:
-            newest_dt = df["dt_str"].max()
-
-        fetched_min_dt = df["dt_str"].min()
-        fetched_len = len(df)
-
-        # 중복 감지 조기 종료 (Overlap-Aware Early Exit)
-        is_overlap = False
-        if last_datetime:
-            if fetched_min_dt <= last_datetime:
-                is_overlap = True
-
-            # DB에 이미 있는 시간대 이후의 새로운 데이터만 남김
-            df = df[df["dt_str"] > last_datetime]
-            if df.empty:
-                # 필터링 후 남은 게 없으면 삽입할 필요 없이 바로 탈출
-                break
-
-        # DB 스키마에 맞게 컬럼 매핑
-        df_clean = pd.DataFrame()
-        df_clean["ticker"] = [ticker] * len(df)
-        df_clean["date"] = df["stck_bsop_date"]
-        df_clean["time"] = df["stck_cntg_hour"]
-        df_clean["open"] = pd.to_numeric(df["stck_oprc"], errors="coerce")
-        df_clean["high"] = pd.to_numeric(df["stck_hgpr"], errors="coerce")
-        df_clean["low"] = pd.to_numeric(df["stck_lwpr"], errors="coerce")
-        df_clean["close"] = pd.to_numeric(df["stck_prpr"], errors="coerce")
-        df_clean["volume"] = pd.to_numeric(df["cntg_vol"], errors="coerce")
-
-        # 거래대금 차분(diff) 계산
-        if "acml_tr_pbmn" in df.columns:
-            acml_amount = pd.to_numeric(df["acml_tr_pbmn"], errors="coerce")
-            is_same_date = df["stck_bsop_date"] == df["stck_bsop_date"].shift(-1)
-            diff_amount = acml_amount - acml_amount.shift(-1)
-            df_clean["amount"] = diff_amount.where(is_same_date, acml_amount)
-
-            is_last_row = df["stck_bsop_date"].shift(-1).isna()
-            is_0900 = df["stck_cntg_hour"] == "090000"
-            df_clean["amount"] = df_clean["amount"].mask(
-                is_last_row & ~is_0900, df_clean["close"] * df_clean["volume"]
+            df = await fetch_minute_data(
+                ticker, target_date, target_time, priority=priority
             )
-        else:
-            df_clean["amount"] = df_clean["close"] * df_clean["volume"]
+            if df.empty:
+                # 엣지 케이스: 야간(예: 새벽 1시)이나 휴일 등 해당 일자에 데이터가 아예 없는 경우
+                # 루프를 종료하지 않고 전날 장 마감 시간(15:30)으로 셋팅하여 계속 탐색
+                try:
+                    curr_date = datetime.strptime(target_date, "%Y%m%d")
+                    prev_date = curr_date - timedelta(days=1)
+                    target_date = prev_date.strftime("%Y%m%d")
+                    target_time = "153000"
+                    continue
+                except Exception as e:
+                    logger.error(f"Failed to calculate previous date for {ticker}: {e}")
+                    break
 
-        df_clean = df_clean.dropna(subset=["date", "time", "close"])
-        if not df_clean.empty:
-            success_any = True
-
-            # STRICT INTEGER 컬럼 형변환 보장
-            df_clean["amount"] = df_clean["amount"].fillna(0).astype(int)
-            df_clean["date"] = df_clean["date"].astype(int)
-            df_clean["time"] = df_clean["time"].astype(int)
-            df_clean["open"] = df_clean["open"].astype(int)
-            df_clean["high"] = df_clean["high"].astype(int)
-            df_clean["low"] = df_clean["low"].astype(int)
-            df_clean["close"] = df_clean["close"].astype(int)
-            df_clean["volume"] = df_clean["volume"].astype(int)
-
-            records = df_clean.to_dict("records")
-
-            conn = connect_sqlite()
             try:
-                cursor = conn.cursor()
-                insert_sql = """
-                    INSERT OR REPLACE INTO minute_ohlcv (
-                        ticker, date, time, open, high, low, close, volume, amount
-                    ) VALUES (
-                        :ticker, :date, :time, :open, :high, :low, :close, :volume, :amount
-                    )
-                """
-                cursor.executemany(insert_sql, records)
-                conn.commit()
+                records = normalize_minute_page(ticker, df)
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"[{ticker}] Invalid minute OHLCV response") from exc
+
+            if newest_dt is None:
+                newest_dt = records[-1]["dt_str"]
+
+            fetched_min_dt = records[0]["dt_str"]
+            fetched_len = len(df)
+
+            # 중복 감지 조기 종료 (Overlap-Aware Early Exit)
+            is_overlap = False
+            if last_datetime:
+                if fetched_min_dt <= last_datetime:
+                    is_overlap = True
+
+                records = [row for row in records if row["dt_str"] >= last_datetime]
+                if not records:
+                    break
+
+            if records:
+                conn = connect_sqlite()
+                try:
+                    cursor = conn.cursor()
+                    last = records[-1]
+                    previous = cursor.execute(
+                        "SELECT cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time=?",
+                        (ticker, last["date"], last["time"]),
+                    ).fetchone()
+                    insert_sql = """
+                        INSERT INTO minute_ohlcv (
+                            ticker, date, time, open, high, low, close, volume, amount, cumulative_amount
+                        ) VALUES (
+                            :ticker, :date, :time, :open, :high, :low, :close, :volume, :amount, :cumulative_amount
+                        )
+                        ON CONFLICT(ticker, date, time) DO UPDATE SET
+                            amount = CASE
+                                WHEN excluded.amount IS NOT NULL THEN excluded.amount
+                                WHEN (minute_ohlcv.open, minute_ohlcv.high, minute_ohlcv.low,
+                                      minute_ohlcv.close, minute_ohlcv.volume) =
+                                     (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume)
+                                     AND (excluded.cumulative_amount IS NULL OR
+                                          excluded.cumulative_amount = minute_ohlcv.cumulative_amount)
+                                THEN minute_ohlcv.amount
+                                ELSE NULL END,
+                            cumulative_amount = CASE
+                                WHEN excluded.cumulative_amount IS NULL AND
+                                     (minute_ohlcv.open, minute_ohlcv.high, minute_ohlcv.low,
+                                      minute_ohlcv.close, minute_ohlcv.volume) =
+                                     (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume)
+                                THEN minute_ohlcv.cumulative_amount
+                                ELSE excluded.cumulative_amount END,
+                            open=excluded.open, high=excluded.high, low=excluded.low,
+                            close=excluded.close, volume=excluded.volume
+                    """
+                    cursor.executemany(insert_sql, records)
+                    cumulative = cursor.execute(
+                        "SELECT cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time=?",
+                        (ticker, last["date"], last["time"]),
+                    ).fetchone()[0]
+                    if previous is not None and previous[0] != cumulative:
+                        successor = cursor.execute(
+                            "SELECT time, cumulative_amount FROM minute_ohlcv WHERE ticker=? AND date=? AND time>? ORDER BY time LIMIT 1",
+                            (ticker, last["date"], last["time"]),
+                        ).fetchone()
+                        if successor is not None:
+                            next_time = (
+                                datetime.strptime(last["dt_str"], "%Y%m%d%H%M%S")
+                                + timedelta(minutes=1)
+                            ).strftime("%H%M%S")
+                            amount = None
+                            if (
+                                int(next_time) == successor[0]
+                                and cumulative is not None
+                                and successor[1] is not None
+                            ):
+                                amount = successor[1] - cumulative
+                                if amount < 0:
+                                    raise ValueError("Invalid cumulative minute amount")
+                            cursor.execute(
+                                "UPDATE minute_ohlcv SET amount=? WHERE ticker=? AND date=? AND time=?",
+                                (amount, ticker, last["date"], successor[0]),
+                            )
+                    conn.commit()
+                    success_any = True
+                except Exception as e:
+                    logger.error(f"[{ticker}] DB Insert Error: {e}")
+                    raise
+                finally:
+                    conn.close()
+
+            # 중복이 감지되었다면 과거 데이터를 더 뒤질 필요가 없으므로 즉시 탈출
+            if is_overlap:
+                break
+
+            # 다음 과거 페이지 조회 설정
+            # (주의: len(df)가 아니라 필터링 전 원본 길이인 fetched_len 기준)
+            if fetched_len >= 100:
+                target_date = fetched_min_dt[:8]
+                target_time = fetched_min_dt[8:]
+            else:
+                try:
+                    curr_date = datetime.strptime(target_date, "%Y%m%d")
+                    prev_date = curr_date - timedelta(days=1)
+                    target_date = prev_date.strftime("%Y%m%d")
+                    target_time = "153000"
+                except Exception as e:
+                    logger.error(f"Failed to calculate previous date for {ticker}: {e}")
+                    break
+
+        if success_any:
+            conn = connect_sqlite()
+            ma_conn = connect_ma_db()
+            try:
+                rebuild_minute_ma_for_ticker(conn, ma_conn, ticker)
+                system_state.set_ticker_ma_ready("minute", ticker, True)
             except Exception as e:
-                logger.error(f"[{ticker}] DB Insert Error: {e}")
+                ma_conn.rollback()
+                logger.error(f"[{ticker}] Minute MA rebuild error: {e}")
                 raise
             finally:
                 conn.close()
+                ma_conn.close()
 
-        # 중복이 감지되었다면 과거 데이터를 더 뒤질 필요가 없으므로 즉시 탈출
-        if is_overlap:
-            break
-
-        # 다음 과거 페이지 조회 설정
-        # (주의: len(df)가 아니라 필터링 전 원본 길이인 fetched_len 기준)
-        if fetched_len >= 100:
-            target_date = fetched_min_dt[:8]
-            target_time = fetched_min_dt[8:]
-        else:
-            try:
-                curr_date = datetime.strptime(target_date, "%Y%m%d")
-                prev_date = curr_date - timedelta(days=1)
-                target_date = prev_date.strftime("%Y%m%d")
-                target_time = "153000"
-            except Exception as e:
-                logger.error(f"Failed to calculate previous date for {ticker}: {e}")
-                break
-
-    if success_any:
-        conn = connect_sqlite()
-        ma_conn = connect_ma_db()
-        try:
-            rebuild_minute_ma_for_ticker(conn, ma_conn, ticker)
-        except Exception as e:
-            ma_conn.rollback()
-            success_any = False
-            logger.error(f"[{ticker}] Minute MA rebuild error: {e}")
-        finally:
-            conn.close()
-            ma_conn.close()
-
-    return success_any, newest_dt
+        return success_any, newest_dt
+    except BaseException:
+        if success_any:
+            system_state.set_ticker_ma_ready("minute", ticker, False)
+        raise
 
 
 async def run_minute_ohlcv_scheduler(
@@ -310,7 +375,7 @@ async def run_minute_ohlcv_scheduler(
         tickers = [row["ticker"] for row in cursor.fetchall()]
     except Exception as e:
         logger.error(f"Failed to fetch tickers: {e}")
-        return
+        raise
     finally:
         conn.close()
 
@@ -342,7 +407,7 @@ async def run_minute_ohlcv_scheduler(
                     success, newest_dt = await process_ticker(
                         ticker, last_datetime, max_steps=15, priority=priority
                     )
-                    if newest_dt:
+                    if success and newest_dt:
                         last_times[ticker] = newest_dt  # 메모리 업데이트
 
                     success_count += 1
@@ -361,13 +426,18 @@ async def run_minute_ohlcv_scheduler(
                     w_queue.task_done()
 
         workers = [asyncio.create_task(worker(queue)) for _ in range(50)]
-        await queue.join()
-        for w in workers:
-            w.cancel()
+        try:
+            await queue.join()
+        finally:
+            for worker_task in workers:
+                worker_task.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
 
         logger.sched(
             f"[SCHED] Cycle Finished. Success: {success_count}, Fail: {fail_count}."
         )
+        if fail_count:
+            raise RuntimeError(f"Minute collection failed for {fail_count} tickers")
 
         if single_cycle:
             logger.sched("Single cycle finished. Exiting minute scheduler (test mode).")
@@ -387,27 +457,48 @@ async def run_minute_ohlcv_scheduler(
 _running_minute_scheduler_task: asyncio.Task | None = None
 
 
-async def start_minute_scheduler_task(markets: list[str] | None = None):
+def _minute_scheduler_done(task: asyncio.Task) -> None:
+    global _running_minute_scheduler_task
+    if _running_minute_scheduler_task is task:
+        _running_minute_scheduler_task = None
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error("Minute OHLCV collector failed: %s", error)
+
+
+async def start_minute_scheduler_task(
+    markets: list[str] | None = None,
+) -> asyncio.Task:
     global _running_minute_scheduler_task
     if (
         _running_minute_scheduler_task is not None
         and not _running_minute_scheduler_task.done()
     ):
-        return False
+        return _running_minute_scheduler_task
 
     loop = asyncio.get_running_loop()
     _running_minute_scheduler_task = loop.create_task(
         run_minute_ohlcv_scheduler(markets)
     )
-    return True
+    _running_minute_scheduler_task.add_done_callback(_minute_scheduler_done)
+    return _running_minute_scheduler_task
 
 
-def stop_minute_scheduler_task():
+async def stop_minute_scheduler_task() -> None:
     global _running_minute_scheduler_task
-    if (
-        _running_minute_scheduler_task is not None
-        and not _running_minute_scheduler_task.done()
-    ):
-        _running_minute_scheduler_task.cancel()
-        return True
-    return False
+    task = _running_minute_scheduler_task
+    if task is None:
+        return
+    if not task.done() and not task.cancelling():
+        task.cancel()
+    completion = asyncio.gather(task, return_exceptions=True)
+    try:
+        await asyncio.shield(completion)
+    except asyncio.CancelledError:
+        await completion
+        raise
+    finally:
+        if _running_minute_scheduler_task is task and task.done():
+            _running_minute_scheduler_task = None

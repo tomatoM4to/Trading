@@ -1,0 +1,379 @@
+import asyncio
+import json
+import threading
+from datetime import datetime, timedelta
+from unittest.mock import patch
+
+import pytest
+import requests
+
+from tests.transport import FakeTransport, response
+
+
+async def submit(label, priority=5):
+    from core.kis_fetch import async_kis_fetch
+
+    return await async_kis_fetch(
+        "/fixture", "FIXTURE", "", {"label": label}, priority=priority
+    )
+
+
+async def entered(transport):
+    if not await asyncio.to_thread(transport.entered.wait, 2):
+        raise AssertionError("Queue never reached the fake transport")
+
+
+async def cancel_all(tasks):
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+pytestmark = pytest.mark.stage3
+
+
+async def test_priority_fifo_serialization_and_completion_spacing():
+    gate = threading.Event()
+    with FakeTransport([response()] * 5, gate=gate) as transport:
+        tasks = [asyncio.create_task(submit("first"))]
+        try:
+            await entered(transport)
+            tasks += [
+                asyncio.create_task(submit(label, priority))
+                for label, priority in [
+                    ("low", 9),
+                    ("high1", 1),
+                    ("high2", 1),
+                    ("medium", 5),
+                ]
+            ]
+            await asyncio.sleep(0)
+            gate.set()
+            await asyncio.wait_for(asyncio.gather(*tasks), 3)
+        finally:
+            gate.set()
+            await cancel_all(tasks)
+    assert [c.params["label"] for c in transport.calls] == [
+        "first",
+        "high1",
+        "high2",
+        "medium",
+        "low",
+    ]
+    assert all(c.timeout == 10 for c in transport.calls)
+    for previous, current in zip(transport.calls, transport.calls[1:], strict=False):
+        assert current.start - previous.end >= 0.1
+
+
+async def test_transport_timeout_and_broker_failure_leave_worker_usable():
+    from core.kis_fetch import APIResp
+
+    with FakeTransport([requests.Timeout("injected"), response(rt_cd="1"), response()]):
+        with pytest.raises(requests.Timeout):
+            await asyncio.wait_for(submit("timeout"), 2)
+        failed = await asyncio.wait_for(submit("broker-error"), 2)
+        assert not failed.is_ok()
+        assert (await asyncio.wait_for(submit("after-error"), 2)).is_ok()
+    malformed = response()
+    malformed._content = b"not-json"
+    assert not APIResp(malformed).is_ok()
+
+
+async def test_cancelled_queued_request_is_not_sent():
+    gate = threading.Event()
+    tasks = []
+    with FakeTransport([response()] * 3, gate=gate) as transport:
+        try:
+            tasks.append(asyncio.create_task(submit("first")))
+            await entered(transport)
+            cancelled = asyncio.create_task(submit("cancelled"))
+            tasks.append(cancelled)
+            await asyncio.sleep(0)
+            cancelled.cancel()
+            await asyncio.gather(cancelled, return_exceptions=True)
+            tasks.append(asyncio.create_task(submit("last")))
+            gate.set()
+            await asyncio.wait_for(asyncio.gather(tasks[0], tasks[-1]), 2)
+            labels = [c.params["label"] for c in transport.calls]
+        finally:
+            gate.set()
+            await cancel_all(tasks)
+    assert labels == ["first", "last"]
+
+
+async def test_stop_resolves_active_and_waiting_callers():
+    from core.kis_fetch import stop_q_worker
+
+    gate = threading.Event()
+    tasks = []
+    with FakeTransport([response()] * 2, gate=gate) as transport:
+        try:
+            tasks.append(asyncio.create_task(submit("active")))
+            await entered(transport)
+            tasks.append(asyncio.create_task(submit("waiting")))
+            await asyncio.sleep(0)
+            stopping = asyncio.create_task(stop_q_worker())
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not stopping.done()
+            gate.set()
+            await asyncio.wait_for(stopping, 2)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            resolved = [task.done() for task in tasks]
+            assert tasks[0].result().is_ok()
+            assert tasks[1].cancelled()
+            assert [c.params["label"] for c in transport.calls] == ["active"]
+        finally:
+            gate.set()
+            await cancel_all(tasks)
+    assert resolved == [True, True], "Stopped queue must not strand response Futures"
+
+
+async def test_restart_does_not_overlap_still_running_transport():
+    from core.kis_fetch import start_q_worker, stop_q_worker
+
+    gate = threading.Event()
+    tasks = []
+    with FakeTransport([response()] * 2, gate=gate) as transport:
+        try:
+            tasks.append(asyncio.create_task(submit("old")))
+            await entered(transport)
+            stopping = asyncio.create_task(stop_q_worker())
+            await asyncio.sleep(0)
+            restarting = asyncio.create_task(start_q_worker())
+            await asyncio.sleep(0.15)
+            assert len(transport.calls) == 1
+            assert not stopping.done()
+            assert not restarting.done()
+            gate.set()
+            await asyncio.wait_for(asyncio.gather(stopping, restarting), 2)
+            tasks.append(asyncio.create_task(submit("new")))
+            await asyncio.wait_for(tasks[-1], 2)
+            await asyncio.to_thread(gate.wait, 1)
+            for _ in range(100):
+                if transport.calls[0].end is not None:
+                    break
+                await asyncio.sleep(0.005)
+        finally:
+            gate.set()
+            await cancel_all(tasks)
+    assert len(transport.calls) == 2
+    assert transport.calls[1].start - transport.calls[0].end >= 0.1
+
+
+async def test_idle_stop_restart_and_new_request():
+    from core.kis_fetch import start_q_worker, stop_q_worker
+
+    await start_q_worker()
+    await stop_q_worker()
+    with FakeTransport([response()]):
+        assert (await submit("restarted")).is_ok()
+
+
+async def test_cancelled_stop_caller_cannot_abort_shutdown_or_admit_requests():
+    from core.kis_fetch import start_q_worker, stop_q_worker
+
+    gate = threading.Event()
+    tasks = []
+    with FakeTransport([response()] * 2, gate=gate) as transport:
+        try:
+            tasks.append(asyncio.create_task(submit("active")))
+            await entered(transport)
+            stopping = asyncio.create_task(stop_q_worker())
+            await asyncio.sleep(0)
+            with pytest.raises(RuntimeError, match="stopping"):
+                await submit("rejected")
+            stopping.cancel()
+            await asyncio.gather(stopping, return_exceptions=True)
+            another_stop = asyncio.create_task(stop_q_worker())
+            tasks.append(another_stop)
+            restarting = asyncio.create_task(start_q_worker())
+            tasks.append(restarting)
+            await asyncio.sleep(0)
+            assert not another_stop.done()
+            assert not restarting.done()
+            gate.set()
+            await asyncio.wait_for(asyncio.gather(*tasks), 2)
+            assert (await submit("after-stop")).is_ok()
+        finally:
+            gate.set()
+            await cancel_all(tasks)
+    assert [call.params["label"] for call in transport.calls] == [
+        "active",
+        "after-stop",
+    ]
+    assert transport.calls[1].start - transport.calls[0].end >= 0.1
+
+
+async def test_stop_cancels_queued_request_before_idle_consumer_resumes():
+    from core.kis_fetch import start_q_worker, stop_q_worker
+
+    await start_q_worker()
+    await asyncio.sleep(0)
+    with FakeTransport([]) as transport:
+        waiting = asyncio.create_task(submit("queued"))
+        await asyncio.sleep(0)
+        await stop_q_worker()
+        await asyncio.gather(waiting, return_exceptions=True)
+    assert waiting.cancelled()
+    assert transport.calls == []
+
+
+def test_auth_failure_and_cache_expiration_use_real_auth_boundary(sandbox):
+    from core import kis_auth
+
+    root = sandbox.path / "tokens"
+    root.mkdir()
+    cache = root / f"KIS{__import__('datetime').datetime.today():%Y%m%d}"
+    cache.write_text(
+        "token: fixture-expired\nvalid-date: '2000-01-01 00:00:00'\n", encoding="utf-8"
+    )
+    with (
+        patch.object(kis_auth, "config_root", root),
+        patch.object(kis_auth, "_kis_env", None),
+        FakeTransport([response(status=401)]) as transport,
+    ):
+        with pytest.raises(RuntimeError):
+            kis_auth.auth(force=False)
+        assert kis_auth._kis_env is None
+        assert transport.calls[0].timeout == 30
+    good = response()
+    good._content = json.dumps(
+        {
+            "access_token": "fixture-token",
+            "access_token_token_expired": "2099-01-01 00:00:00",
+        }
+    ).encode()
+    with (
+        patch.object(kis_auth, "config_root", root),
+        patch.object(kis_auth, "_kis_env", None),
+        patch.dict(kis_auth._base_headers),
+        FakeTransport([good]) as transport,
+    ):
+        kis_auth.auth(force=True)
+        kis_auth.auth(force=False)
+        assert len(transport.calls) == 1
+        assert transport.calls[0].timeout == 30
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "http",
+        "timeout",
+        "json",
+        "missing-token",
+        "empty-token",
+        "missing-expiry",
+        "invalid-expiry",
+        "expired",
+    ],
+)
+def test_auth_rejects_invalid_issuance_without_publishing_or_logging_secrets(
+    sandbox, failure
+):
+    from core import kis_auth
+
+    secret = "fixture-sensitive-value"
+    payload = {
+        "access_token": secret,
+        "access_token_token_expired": "2099-01-01 00:00:00",
+    }
+    reply = response(status=401 if failure == "http" else 200)
+    if failure == "missing-token":
+        payload.pop("access_token")
+    elif failure == "empty-token":
+        payload["access_token"] = ""
+    elif failure == "missing-expiry":
+        payload.pop("access_token_token_expired")
+    elif failure == "invalid-expiry":
+        payload["access_token_token_expired"] = secret
+    elif failure == "expired":
+        payload["access_token_token_expired"] = "2000-01-01 00:00:00"
+    reply._content = (
+        b"invalid-json" if failure == "json" else json.dumps(payload).encode()
+    )
+    if failure == "timeout":
+        reply = requests.Timeout(secret)
+    with (
+        patch.object(kis_auth, "config_root", sandbox.path / "tokens"),
+        patch.object(kis_auth, "_kis_env", None),
+        patch.object(kis_auth.logger, "error") as log,
+        FakeTransport([reply]) as transport,
+    ):
+        with pytest.raises(RuntimeError) as caught:
+            kis_auth.auth(force=True)
+        assert kis_auth._kis_env is None
+        assert not (sandbox.path / "tokens").exists()
+        assert transport.calls[0].timeout == 30
+        assert secret not in str(caught.value)
+        assert secret not in str(log.call_args_list)
+
+
+async def test_refresh_failure_preserves_valid_token_and_rejects_it_after_expiry(
+    sandbox,
+):
+    from core import kis_auth
+    from core.scheduler import SystemScheduler
+
+    root = sandbox.path / "tokens"
+    root.mkdir()
+    expires = datetime.today() + timedelta(hours=1)
+    cache = root / f"KIS{datetime.today():%Y%m%d}"
+    contents = f"token: fixture-valid\nvalid-date: '{expires:%Y-%m-%d %H:%M:%S}'\n"
+    cache.write_text(contents, encoding="utf-8")
+
+    class AfterExpiry(datetime):
+        @classmethod
+        def today(cls):
+            return expires + timedelta(seconds=1)
+
+    with (
+        patch.object(kis_auth, "config_root", root),
+        FakeTransport([]) as transport,
+    ):
+        kis_auth.auth(force=False)
+        original = kis_auth.get_kis_env()
+        headers = kis_auth.get_base_header()
+        assert original.my_token == "fixture-valid"
+        assert transport.calls == []
+        with (
+            FakeTransport([response(status=503)]),
+            patch("core.scheduler.logger") as log,
+        ):
+            with pytest.raises(RuntimeError):
+                await SystemScheduler().refresh_auth_job(force=True)
+            log.error.assert_called_once()
+            log.sched.assert_not_called()
+        assert kis_auth.get_kis_env() == original
+        assert kis_auth.get_base_header() == headers
+        assert cache.read_text(encoding="utf-8") == contents
+        with (
+            patch.object(kis_auth, "datetime", AfterExpiry),
+            FakeTransport([]) as expired,
+        ):
+            with pytest.raises(RuntimeError):
+                await submit("expired-token")
+            assert expired.calls == []
+
+
+async def test_refresh_success_is_reported_only_after_authentication(sandbox):
+    from core import kis_auth
+    from core.scheduler import SystemScheduler
+
+    good = response()
+    good._content = json.dumps(
+        {
+            "access_token": "fixture-new",
+            "access_token_token_expired": "2099-01-01 00:00:00",
+        }
+    ).encode()
+    with (
+        patch.object(kis_auth, "config_root", sandbox.path / "tokens"),
+        FakeTransport([good]),
+        patch("core.scheduler.logger") as log,
+    ):
+        await SystemScheduler().refresh_auth_job(force=True)
+        assert kis_auth.get_kis_env().my_token == "fixture-new"
+        log.sched.assert_called_once()
+        log.error.assert_not_called()

@@ -1,0 +1,6 @@
+[mcp_servers.kis_code_assistant]
+command = "uv"
+args = [
+  "--directory", "open-trading-api/MCP/KIS Code Assistant MCP",
+  "run", "--locked", "python", "server.py", "--stdio",
+]

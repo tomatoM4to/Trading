@@ -1,102 +1,135 @@
-# 스크리너 벤치마크 및 부하 테스트 (Screener Benchmark)
+# 개선 흐름
 
-## 1. 개요
-`scripts/benchmark_screener.py` 스크립트는 Trading Server의 핵심인 **스크리너 엔진(Screener Engine)**의 실시간 성능과 부하 처리 능력을 측정하기 위해 작성되었습니다.
+전체 OHLCV 메모리화 → 조건 실행 순서 조정 → 후보 종목만 조회 → MA 사전 계산 → OHLCV·MA 저장 계층 분리 → 정합성 검증 강화·일봉 증분 호출 축소 순으로 개선했다.
 
-본 벤치마크는 2,400개 전 종목을 대상으로 복잡한 SQLite Push-down 윈도우 함수 쿼리(이평선 정배열, 크로스, 밀집 등)가 디스크 I/O 및 1GB RAM 환경(Oracle Cloud)에서 어느 정도의 지연 시간(Latency)을 발생시키는지 추적합니다.
+| 시기 | 주요 변화 | 대표 결과 |
+|---|---|---|
+| 2026-08-04 | 전체 OHLCV 메모리화 | 서버의 기록된 HTTP 오류가 6/10 → 4/10으로 줄었지만 Heavy 2~5는 여전히 약 60초에 timeout |
+| 2026-08-05 | 비용 정렬·후보 축소·단방향 윈도 | 로컬 Heavy 2가 27.388 → 2.417초, 기록상 **91.2% 단축** |
+| 2026-08-06 | 쿼리 최적화 서버 반영 | Heavy 1~5가 0.380~0.641초로 기록됐으나 모두 0건 결과여서 정확성은 별도 확인 필요 |
+| 2026-08-08~09 | MA 사전 계산 | 서버 분봉 교차 30.116 → 19.098초(**36.6%**), 분봉 수렴 28.569 → 15.355초(**46.3%**) 단축 |
+| 이후, 측정일 미기록 | OHLCV 디스크 정본·MA 메모리 분리 | 대표 조회 지연 약 4% 증가를 감수하고 전체 OHLCV의 메모리 중복 제거 |
+| 2026-11-13 | 검증된 일봉 이력의 증분 수집 | 4종목 정상 증분 20 → 4요청(**80% 감소**), 2.047 → 0.395초(**80.7% 단축**) |
+| 2026-11-13 | 정합성 수정 후 전체 규모 검증 | 2,400종목 조회 0.945~0.975초, 기대 1,200종목 일치, cgroup peak **424.75MiB**, 1GiB 제한 내 정상 종료 |
 
-## 2. 벤치마크 시나리오 구성
-벤치마크는 크게 가벼운 단일 연산(Light)과 극단적인 다중 조건(Heavy) 그룹으로 나뉩니다.
+8월 값은 당시 HTTP 측정의 관측치다. 데이터 snapshot·반복 분포가 고정되지 않았고 SSE 오류·미완료를 성공으로 집계할 수 있어, 11월의 독립 기대값 검증과 직접 비교하지 않는다. 단축률은 `(변경 전 - 변경 후) / 변경 전`으로 계산했다.
 
-### ☀️ Light Scenarios (단일/단순 필터)
-1. **Light 1 (Daily Cross)**: 일봉 기준 단기/장기 이평선 크로스 단일 검사 (`ma_daily_5` 상향 돌파 `ma_daily_20`).
-2. **Light 2 (Minute Cross)**: 분봉 기준 단기/장기 이평선 크로스 단일 검사.
-3. **Light 3 (Daily Alignment)**: 3개 일봉 이평선(`ma_daily_5, 20, 60`)의 정배열 상태 유지 검사.
-4. **Light 4 (Minute Convergence Point)**: 분봉 기준 2개 이평선의 단기 밀집 지점 발생 여부 검사.
-5. **Light 5 (Daily Alignment + Foreign Buy Rank)**: 정배열 검사와 KIS 외부 수급 API(외국인 순매수 상위)를 `AND` 연산으로 조합.
+# 과거 HTTP 측정 기록
 
-### ⛈️ Heavy Scenarios (극한 스트레스 테스트)
-1. **Heavy 1 (Daily Deep Window)**: 5개 이평선 정배열 + 수렴 횡보 + 크로스 + 외부 수급(외인/기관)을 동시에 만족하는 종목 찾기.
-2. **Heavy 2 (Minute Stress Test)**: 분봉 데이터(약 460만 건)를 대상으로 5개 이평선 정배열 및 밀집 등을 장기간(10 캔들 이상) 추적.
-3. **Heavy 3 (Mixed Timeframes Combo)**: 일봉과 분봉 쿼리를 하나의 파이프라인에서 섞어서 교집합(`AND`) 처리 시의 성능 측정.
-4. **Heavy 4 (Extreme Window Functions)**: 다수의 이평선과 긴 탐색 기간(`duration: 15`)을 주입하여 SQLite 임시 테이블 생성 및 정렬 오버헤드 극대화.
-5. **Heavy 5 (Full Minute DB Scan)**: 전체 분봉 DB에 대해 가능한 모든 무거운 연산을 동시에 쏟아붓는 최고 부하 테스트.
+## 1. 전체 메모리 DB — I/O를 줄여도 무거운 계산은 남음
 
-## 3. 실행 방법
+2026-08-04, Oracle Cloud 1GB RAM. 초기 short-circuit 결함 수정 후 기준선과 전체 메모리 DB 도입 후 두 번의 기록이다.
 
-벤치마크 스크립트는 `uv` 환경 또는 파이썬 가상환경에서 `requests` 라이브러리를 통해 동작합니다.
-스크리너 API가 SSE(Server-Sent Events) 스트림으로 동작하므로 스크립트는 스트림을 구독하여 `{"type": "complete"}` 이벤트가 도착할 때까지의 소요 시간을 측정합니다.
+| 시나리오 | 도입 전 | 도입 후 1차 / 2차 |
+|---|---:|---:|
+| 일봉 교차 (Light 1) | 10.172초 | 6.128 / 5.577초 |
+| 분봉 교차 (Light 2) | 60.096초에 timeout | 41.108 / 40.329초 |
+| 일봉 정배열 (Light 3) | 21.980초 | 7.803 / 7.798초 |
+| 분봉 수렴 (Light 4) | 60.115초에 timeout | 42.257 / 40.070초 |
+| Heavy 2~5 | 4개 모두 timeout | 두 실행 모두 4개 timeout 유지 |
+| 전체 HTTP 오류 | 6 / 10 | 4 / 10, 4 / 10 |
 
-```bash
-# 기본 실행 (운영 서버 타겟: https://168.107.55.31.nip.io)
-uv run python scripts/benchmark_screener.py
+가벼운 조회는 빨라졌지만 분봉 윈도 계산의 병목은 남았다. 전후 검색 종목 수도 달라 동일 데이터의 순수 성능 비교로 보지는 않는다.
 
-# 로컬 개발 환경 타겟 실행
-uv run python scripts/benchmark_screener.py --host http://localhost:8000
+근거: [도입 전](benchmark-result/screener_benchmark_20260804_152738.csv), [도입 후 1차](benchmark-result/screener_benchmark_20260804_222615.csv), [도입 후 2차](benchmark-result/screener_benchmark_20260804_224407.csv). 결함 수정 전 [초기 1차](benchmark-result/screener_benchmark_20260804_145625.csv)·[2차](benchmark-result/screener_benchmark_20260804_150706.csv)의 일부 0건·극단적으로 짧은 응답은 비교 기준에서 제외했다.
+
+## 2. 조건 순서와 후보 축소 — 가장 큰 조회 시간 감소
+
+2026-08-04~05, 고사양 로컬의 Heavy 2(분봉 복합 조건) 기록이다.
+
+| 적용 순서 | 변경 이유 | 시간 | 직전 단계 대비 |
+|---|---|---:|---:|
+| 메모리 DB 기준선 | 전체 범위의 윈도 계산 비용 확인 | 27.388초 | — |
+| 비용 정렬 | 후보를 줄일 조건부터 실행 | 16.500초 | 39.8% 단축 |
+| ticker pushdown | 앞선 조건의 후보만 후속 SQL에서 조회 | 2.430초 | 85.3% 단축 |
+| 단방향 윈도 | 시간축 재정렬 줄이기 | 2.417초 | 0.5% 차이 |
+
+기준선 대비 91.2% 줄었고, 가장 큰 단계별 변화는 후보 축소였다. 단방향 윈도의 0.013초 차이는 단일 실행에서 유의미한 개선으로 단정하지 않는다. Heavy 2는 네 실행 모두 0건이며, 당시 측정에는 독립 정답 비교가 없었다.
+
+근거: [기준선](benchmark-result/screener_benchmark_20260804_215830.csv), [비용 정렬](benchmark-result/screener_benchmark_20260805_212946.csv), [후보 축소](benchmark-result/screener_benchmark_20260805_215007.csv), [단방향 윈도](benchmark-result/screener_benchmark_20260805_215923.csv).
+
+2026-08-06 서버 반영 후 Light 1~4는 **11.394~23.654초**, 수급을 결합한 Light 5는 **0.368초**, Heavy 1~5는 **0.380~0.641초**로 기록됐다. 후보를 줄일 수 있는 조건에서 짧은 응답이 관측됐지만, Heavy 결과는 모두 0건이므로 기존 timeout 대비 개선율을 확정하지 않는다. [서버 반영 기록](benchmark-result/screener_benchmark_20260806_185510.csv)
+
+## 3. MA 사전 계산 — 후보 축소가 어려운 조회 개선
+
+2026-08-08~09. 조회마다 반복하던 MA 윈도 계산을 수집 시 사전 계산으로 옮겼다.
+
+| 환경 | 시나리오 | 적용 전 → 후 | 단축률 | 검색 종목 수 전·후 |
+|---|---|---:|---:|---:|
+| Oracle 1GB | 일봉 교차 (Light 1) | 6.598 → 3.698초 | 44.0% | 265개 동일 |
+| Oracle 1GB | 분봉 교차 (Light 2) | 30.116 → 19.098초 | 36.6% | 129개 동일 |
+| Oracle 1GB | 일봉 정배열 (Light 3) | 7.931 → 3.668초 | 53.8% | 190개 동일 |
+| Oracle 1GB | 분봉 수렴 (Light 4) | 28.569 → 15.355초 | 46.3% | 2,361개 동일 |
+| 고사양 로컬 | 분봉 교차 (Light 2) | 2.942 → 1.493초 | 49.3% | 129개 동일 |
+| 고사양 로컬 | 분봉 수렴 (Light 4) | 2.969 → 1.522초 | 48.7% | 2,361개 동일 |
+
+서버의 대표 로컬 필터 4종은 36.6~53.8% 짧아졌다. 검색 개수는 같지만 당시 CSV만으로 종목 구성·필터값 전체의 동등성까지 증명하지는 못한다. 이미 짧았던 Heavy 4는 0.320 → 0.524초로 늘어 모든 조건이 빨라진 것도 아니다.
+
+근거: [서버 적용 전](benchmark-result/screener_benchmark_20260808_213722.csv)·[후](benchmark-result/screener_benchmark_20260809_000809.csv), [로컬 적용 전](benchmark-result/screener_benchmark_20260808_215546.csv)·[후](benchmark-result/screener_benchmark_20260808_222427.csv).
+
+# 저장 계층 분리 기록
+
+전체 OHLCV와 MA를 함께 메모리에 두던 구조에서 OHLCV는 디스크 정본으로, MA만 메모리에 남겼다. 약 202MiB DB를 사용한 로컬 단일 실행이며 측정일·CPU·반복 분포는 기록되지 않았다.
+
+| 대표 조회 | 분리 전 → 후 | 지연 변화 |
+|---|---:|---:|
+| 일봉 1개월 거래량 돌파 | 0.510 → 0.532초 | 4.3% 증가 |
+| 분봉 4시간 거래량 돌파 | 3.332 → 3.463초 | 3.9% 증가 |
+
+조회 지연 약 4%를 감수하고 전체 OHLCV의 애플리케이션 메모리 중복을 제거했다. 당시 RSS 전후 값은 없어 **202MiB만큼 메모리가 감소했다는 뜻은 아니다**. OS 캐시 영향도 포함된 기록이다. [당시 설계 근거](https://github.com/tomatoM4to/Trading/blob/371984acb689fea1cc45952642274059146f0b0c/docs/architecture.md)
+
+# 2026-11-13 — 정합성 검증과 수집 비용 개선
+
+측정 성공 기준을 독립 기대값 비교로 바꿨다. 스크리너는 단 하나의 `complete`와 전체 기대 종목·필터값, 수집은 전체 OHLCV·보존 MA가 맞아야 시간을 성공 기록으로 채택한다. 오류·미완료·잘못된 빈 결과는 실패다.
+
+## 제한 Linux 비교 조건
+
+- 기준선 `6c6b4d5`와 잔여 결함 수정 작업 트리를 동일 합성 입력으로 비교했다.
+- Python 3.12.12 / SQLite 3.40.1 / Docker Desktop WSL2, `--cpus=1 --memory=1g --network=none --read-only`, tmpfs 768MiB를 사용했다.
+- 기준선은 같은 테스트 Dockerfile로 만들고 비교 측정 스크립트만 읽기 전용 mount로 추가했다. 운영 자격 증명·DB는 사용하지 않았다.
+- Fake HTTP 지연은 0이며 실제 Oracle CPU·디스크·증권사 왕복 지연과 동등한 환경은 아니다.
+
+## 일봉 수집 비교
+
+검증된 최신 500봉의 fingerprint가 일치할 때만 증분 조회를 조기 종료하도록 바꿨다. 4종목에 최초 500봉 → 신규 1봉 → 첫 페이지 밖 내부 행(`rows[40]`) 삭제·복구를 순서대로 실행했다.
+
+| 시나리오 | 요청 수 전 → 후 | 시간 전 → 후 | Queue 대기 합계 전 → 후 | 정합성 |
+|---|---:|---:|---:|---|
+| 최초 수집 | 20 → 20 | 1.955 → 1.970초 | 7.134 → 7.183초 | 2,000행·MA 일치 |
+| 검증된 이력 + 1봉 | **20 → 4** | **2.047 → 0.395초** | **7.481 → 0.916초** | 2,004행·MA 일치 |
+| 내부 갭 복구 | 20 → 20 | 2.057 → 2.019초 | 7.476 → 7.392초 | 2,004행·MA 일치 |
+
+정상 증분은 **요청 80%, 시간 80.7%, Queue 대기 합계 87.8% 감소**했다. 최초 수집과 갭 복구의 요청 수·정합성은 유지했다. Python peak RSS는 99.67 → 100.34MiB였다. Queue 대기는 요청별 대기의 합이므로 벽시계 시간보다 클 수 있다. [측정기](../scripts/benchmark_collection.py), [검증 사례](../tests/test_stage2.py)
+
+## 2,400종목 스크리너
+
+정합성 수정과 스레드 재구축·원본 누적값 추가 이후에도 1GiB 안에서 전체 규모를 처리하는지 확인했다. 일봉 1,200,000행·분봉 1,416,000행, 보존 MA 일봉 722,400행·분봉 938,400행을 사용했다. 분봉 MA5/MA20 정배열 1봉 조건이며 매회 기대 **1,200종목과 필터값 전체가 일치**했다.
+
+| 측정 | 기준선 | 수정본 |
+|---|---:|---:|
+| 입력 생성·저장·MA 구축 | 33.452초 | 33.678초 |
+| 조회 1 / 2 / 3회 | 0.955 / 0.940 / 0.941초 | 0.975 / 0.952 / 0.945초 |
+| Python peak RSS | 272.67MiB | 279.23MiB |
+| cgroup 전체 peak | 미측정 | **424.75MiB** |
+
+수정본은 조회 **0.945~0.975초**, cgroup `memory.peak` **445,378,560bytes**로 OOM 없이 종료했다. 속도 개선을 입증한 비교는 아니며, 정확성을 유지한 채 제한 내 생존한 결과다. 단기 대표 쿼리 3회로 장시간 누적이나 모든 복합 조건을 보장하지 않는다. [측정기](../scripts/benchmark_screener.py)
+
+같은 날 앞서 수행한 제한 없는 Windows / Python 3.12.12 / SQLite 3.50.4의 64종목 단일 실행은 69,760 OHLCV행, MA 일봉 19,264행·분봉 25,024행이었다. 준비 **1.543초**, 조회 3회 **0.0251~0.0262초**, 매회 **32종목·필터값 일치**, Python peak RSS **약 93.9MiB**를 기록했다. 당시 Docker 엔진에 접근하지 못해 로컬에서 측정했으며, 결과 JSON은 사용자 요청으로 제거하고 조건과 요약을 보존했다. 규모·환경이 달라 위 2,400종목 결과와 직접 비교하지 않는다.
+
+# 재현 명령
+
+현재 측정은 격리 DB와 합성 입력을 사용한다. 스크리너는 2~2,400종목·1~20회, 일봉 수집은 1~100종목을 지원한다. 결과는 콘솔 JSON이며 스크리너의 `--report <경로>`를 지정한 경우만 파일로 저장한다.
+
+```powershell
+uv run --locked python scripts/benchmark_screener.py --tickers 64 --repeats 3
+uv run --locked python scripts/benchmark_collection.py --tickers 4
 ```
 
-## 4. 벤치마크 결과 및 로그 분석
+[테스트 이미지](testing.md#docker-linux-검증)를 만든 뒤 제한 환경에서 실행한다.
 
-실행이 완료되면 루트 디렉토리에 `screener_benchmark_YYYYMMDD_HHMMSS.csv` 형태로 결과가 저장됩니다. CSV 파일에는 시나리오명, 소요 시간(초), 검색된 종목 수(Tickers Found), 성공/실패 여부가 기록됩니다.
+```powershell
+docker run --rm --cpus=1 --memory=1g --network=none --read-only --tmpfs /tmp:rw,size=768m trading-test:docs python scripts/benchmark_collection.py --tickers 4
+docker run --rm --cpus=1 --memory=1g --network=none --read-only --tmpfs /tmp:rw,size=768m trading-test:docs python scripts/benchmark_screener.py --tickers 2400 --repeats 3
+```
 
-### 주요 결과 해석
-- **0.1초 미만의 비정상적인 종료**: 잘못된 쿼리로 인해 결과가 즉시 빈 값으로 반환된 과거 short-circuit 사례일 수 있습니다. 현재 입력 계약은 [`screener.md`](screener.md)를 따릅니다.
-- **정상적인 연산 소요 시간**: SQLite의 풀스캔 및 윈도우 함수 처리로 인해 시나리오의 무거움에 따라 수 초에서 ~30초 가량이 정상적인 소요 시간입니다.
-- **최적화 지표 (In-Memory 도입 완료)**: 물리 디스크 I/O 병목을 줄이기 위해 `file::memory:?cache=shared` 기반 주 DB를 사용합니다. 현재 구조는 [`database.md`](database.md)를 참고합니다.
-
-## 5. 벤치마크 결과 히스토리
-서버(Oracle Cloud 1GB RAM)와 로컬 환경에서 점진적인 아키텍처 최적화를 수행하며 측정한 결과들입니다.
-
-### ☁️ 운영 서버 (Oracle Cloud, 1GB RAM)
-1. 초기 최적화 전 (버그 포함)
-- 참고: 1, 2차 테스트는 `Short-circuit` 버그로 인해 쿼리가 무시되어 0초로 기록된 결과입니다.
-- [screener_benchmark_20260804_145625.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260804_145625.csv)
-- [screener_benchmark_20260804_150706.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260804_150706.csv)
-
-2. 버그 해결 후 정밀 테스트
-- 참고: 정상적으로 DB 쿼리가 수행되었으나, 디스크 I/O 병목으로 인해 쿼리 소요 시간이 수십 초에 달했습니다.
-- [screener_benchmark_20260804_152738.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260804_152738.csv)
-
-3. In-Memory DB 최적화 도입
-- 최적화 성과: Disk I/O를 0으로 만들어 전반적인 속도는 올랐으나, 분봉 데이터 윈도우 함수 처리 시 1GB RAM 환경의 연산 한계로 인해 60초 타임아웃(Timeout)이 다수 발생했습니다.
-- [screener_benchmark_20260804_222615.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260804_222615.csv)
-- [screener_benchmark_20260804_224407.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260804_224407.csv)
-
-4. 1차~4차 아키텍처 최적화 전면 적용 (서버 최종본)
-- 최적화 성과: 로컬에서 검증된 최적화 기법(AST Cost 정렬, 동적 Ticker 푸시다운, 단방향 윈도우 등)을 1GB RAM 운영 서버에 모두 적용 후 측정한 최종 결과입니다. 풀스캔이 발생하는 단순 시나리오(Light 1~4)는 11~23초 소요되나, 수급 필터나 복합 조건이 포함된 시나리오들(Light 5, Heavy 1~5)은 사전 파티션 축소(지연 평가) 및 Short-circuit 덕분에 **전부 0.6초 이내(기존 60초 타임아웃 대비 99% 이상 단축)**에 처리되는 극적인 성능 최적화를 달성했습니다.
-- [screener_benchmark_20260806_185510.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260806_185510.csv)
-
-5. 인메모리 MA 엔진 도입 전 (서버 베이스라인 재측정)
-- 참고: 현재 파이썬 MA 엔진 도입 직전에 측정한 과거 서버 성능입니다. 분봉 윈도우 풀스캔 연산(Light 2, Light 4) 시 약 28~30초가 소요됐습니다.
-- [screener_benchmark_20260808_213722.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_213722.csv)
-
-6. 인메모리 MA 도입 후
-- 30%~50% 개선
-- [screener_benchmark_20260809_000809.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260809_000809.csv)
-
-### 💻 로컬 머신 (High Spec)
-> 참고: 로컬 환경은 리소스가 넉넉하여 무거운 쿼리도 타임아웃이 발생하지 않았으며, 순수한 알고리즘 및 쿼리 최적화의 효과를 정밀하게 추적하기 위해 사용되었습니다.
-
-1. In-Memory DB 기준 측정 (로컬 베이스라인)
-- 참고: 디스크 병목은 없으나, 무거운 분봉 스트레스 쿼리(Heavy 2)의 경우 로컬에서도 **약 16.5초** 이상 소요되었습니다.
-- [screener_benchmark_20260804_215830.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260804_215830.csv)
-
-2. AST 파이프라인 최적화 (휴리스틱 Cost 정렬)
-- 최적화 성과: 가벼운 API 기반 필터를 우선 실행(Cost 0)하도록 재정렬하여 초기 종목 파티션을 크게 축소했습니다.
-- [screener_benchmark_20260805_212946.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260805_212946.csv)
-
-3. 동적 Ticker 푸시다운 (Push-down)
-- 최적화 성과: 앞서 축소된 종목 리스트 30개를 SQL 쿼리에 직접 주입(`WHERE ticker IN (...)`)하여 풀스캔을 차단했습니다. 그 결과 로컬 기준 **16.50초 → 2.43초(약 85% 단축)**라는 압도적인 성능 향상을 달성했습니다.
-- [screener_benchmark_20260805_215007.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260805_215007.csv)
-
-4. 단방향 윈도우 쿼리 최적화 (Reverse Windowing)
-- 최적화 성과: `date ASC`로 재정렬하던 SQLite 오버헤드를 제거하고, 단일 방향(`rn ASC`) 윈도우 처리를 구현했습니다. 로컬 기준 절대 시간 차이는 **2.43초 → 2.42초**로 미미하지만, 1GB 서버 환경에서의 치명적인 메모리 스왑(Bi-directional Sorting 오버헤드)을 원천 차단하는 아키텍처적 완성도를 달성했습니다.
-- [screener_benchmark_20260805_215923.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260805_215923.csv)
-
-5. 인메모리 MA 엔진 도입 전 (로컬 베이스라인 재측정)
-- 참고: 현재 파이썬 MA 엔진 도입 직전에 측정한 과거 로컬 성능입니다. 분봉 윈도우 풀스캔 시 약 2.9초가 소요됐습니다.
-- [screener_benchmark_20260808_215546.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_215546.csv)
-
-6. 순수 파이썬 인메모리 MA 엔진 전면 적용
-- 최적화 성과: 무거운 SQLite 윈도우 함수 연산을 완전히 덜어내고, 파이썬 객체 기반의 O(1) 캐시와 전용 메모리 MA 테이블을 구축한 최종 벤치마크 결과입니다. 가장 무거운 분봉 윈도우 풀스캔 쿼리(Light 2, 4) 기준 **2.9초 → 1.4초(약 50% 단축)**로 극적인 성능 향상을 보였으며 물리 디스크 I/O를 원천 차단했습니다.
-- [screener_benchmark_20260808_222427.csv](https://github.com/tomatoM4to/Trading/blob/main/docs/benchmark-result/screener_benchmark_20260808_222427.csv)
+Python peak RSS는 측정 프로세스의 최고치로 OS page cache를 제외한다. tmpfs·page cache를 포함한 전체 peak는 Python 종료 뒤 같은 컨테이너에서 `/sys/fs/cgroup/memory.peak`를 읽는다. 이번 문서 수정에서는 측정을 재실행하지 않았다.

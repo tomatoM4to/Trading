@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test:chart": "node --test lib/chart-utils.test.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

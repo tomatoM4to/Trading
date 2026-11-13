@@ -11,18 +11,31 @@ from core.scheduler import SystemScheduler
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes import admin, market, screener
+from tasks.minute_ohlcv_scheduler import stop_minute_scheduler_task
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
 
-async def cancel_background_tasks(tasks: list[asyncio.Task]) -> None:
-    """Cancel and await application-owned background tasks during shutdown."""
+def background_task_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        from core.state import system_state
+
+        system_state.set_ma_ready(False, "데이터 초기화에 실패했습니다.")
+        logger.error("Background initialization failed: %s", error)
+
+
+async def shutdown_background_tasks(tasks: list[asyncio.Task]) -> None:
     active_tasks = [task for task in tasks if not task.done()]
     for task in active_tasks:
         task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+    await stop_minute_scheduler_task()
+    await stop_q_worker()
 
 
 @asynccontextmanager
@@ -36,17 +49,9 @@ async def lifespan(app: FastAPI):
     load_dotenv()
 
     logger.info("Application starting up...")
+    from core.state import system_state
 
-    # DB 연결성 확인 및 초기화
-    try:
-        init_sqlite_connection()
-        logger.info("Database connection validated")
-    except Exception as e:
-        logger.error("Failed to connect to the database: %s", e)
-        raise e
-
-    # KIS API Rate Limit 제어 워커 백그라운드 구동 (모든 통신에 필수)
-    await start_q_worker()
+    system_state.set_ma_ready(False)
 
     is_debug = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
     is_sched = os.getenv("SCHED", "False").lower() in ("true", "1", "t")
@@ -61,39 +66,57 @@ async def lifespan(app: FastAPI):
         logger.info("DEBUG mode is OFF: Forcing new auth token issuance (force=True)")
         await asyncio.to_thread(auth, force=True)
 
+    # DB 연결성 확인 및 초기화
+    try:
+        init_sqlite_connection()
+        logger.info("Database connection validated")
+    except Exception as e:
+        logger.error("Failed to connect to the database: %s", e)
+        raise e
+
     system_scheduler = None
     background_tasks: list[asyncio.Task] = []
+    try:
+        # KIS API Rate Limit 제어 워커 백그라운드 구동 (모든 통신에 필수)
+        await start_q_worker()
 
-    # 2. 백그라운드 스케줄러 & 부트스트랩 제어
-    if is_sched:
-        logger.sched(
-            "SCHED mode is ON: Starting system scheduler and bootstrap pipeline..."
-        )
-        system_scheduler = SystemScheduler()
-        system_scheduler.start()
+        # 2. 백그라운드 스케줄러 & 부트스트랩 제어
+        if is_sched:
+            logger.sched(
+                "SCHED mode is ON: Starting system scheduler and bootstrap pipeline..."
+            )
+            system_scheduler = SystemScheduler()
+            system_scheduler.start()
 
-        # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
-        background_tasks.append(asyncio.create_task(run_bootstrap_pipeline()))
-    else:
-        logger.sched(
-            "SCHED mode is OFF: Skipping background scheduler and bootstrap tasks."
-        )
-        # SCHED가 꺼져 있어도 스크리너를 위해 MA 인메모리 DB는 수화(Hydration)시켜야 함
-        from core.bootstrap import rebuild_ma_database
+            # 부트스트랩 파이프라인 백그라운드 구동 (FastAPI 블로킹 방지)
+            background_tasks.append(asyncio.create_task(run_bootstrap_pipeline()))
+        else:
+            logger.sched(
+                "SCHED mode is OFF: Skipping background scheduler and bootstrap tasks."
+            )
+            # SCHED가 꺼져 있어도 스크리너를 위해 MA 인메모리 DB는 수화(Hydration)시켜야 함
+            from core.bootstrap import rebuild_ma_database
 
-        logger.info(
-            "[Memory DB] Hydrating In-Memory MA Database from disk (SCHED=False)..."
-        )
-        background_tasks.append(asyncio.create_task(rebuild_ma_database()))
+            logger.info(
+                "[Memory DB] Hydrating In-Memory MA Database from disk (SCHED=False)..."
+            )
+            background_tasks.append(asyncio.create_task(rebuild_ma_database()))
 
-    yield  # Application runs here
+        for task in background_tasks:
+            task.add_done_callback(background_task_done)
 
-    # Shutdown code
-    logger.info("Application shutting down...")
-    if system_scheduler:
-        system_scheduler.stop()
-    await cancel_background_tasks(background_tasks)
-    await stop_q_worker()
+        yield  # Application runs here
+    finally:
+        # Shutdown code
+        logger.info("Application shutting down...")
+        if system_scheduler:
+            system_scheduler.stop()
+        shutdown = asyncio.create_task(shutdown_background_tasks(background_tasks))
+        try:
+            await asyncio.shield(shutdown)
+        except asyncio.CancelledError:
+            await shutdown
+            raise
 
 
 app = FastAPI(

@@ -1,68 +1,75 @@
-# 스케줄러와 수집 파이프라인
+# Overview
 
-## SystemScheduler
+- 예약·부트스트랩·재시도가 같은 정본과 호출 예산을 사용하므로 작업 소유권과 완료 기준을 공유한다.
+- 부분 저장과 취소를 정상 완료로 처리하지 않아 재실행으로 데이터를 복구할 수 있게 한다.
 
-`SystemScheduler`는 프로세스 내 단일 `AsyncIOScheduler`를 감싼 싱글턴이다. 각 작업은 `max_instances=1`, `coalesce=True`로 등록된다. 시간대는 서버와 컨테이너의 `Asia/Seoul` 설정을 전제로 한다.
+# Checkpoints
 
-| 시각 | 작업 | 주요 효과 |
-|---|---|---|
-| 04:00 | `cleanup_ohlcv_job` | 거래일 기준 보존 개수로 일봉·분봉 GC 후 WAL 체크포인트 |
-| 08:30 | `refresh_stock_codes_job` | 종목 마스터와 상태·재무 정보 갱신 후 동기화 |
-| 08:55 | `start_minute_ohlcv_job` | 장중 분봉 수집 루프 시작 |
-| 16:00 | `run_daily_ohlcv_job` | 전 종목 일봉 갭필·갱신 후 동기화 |
-| 22:00 | `refresh_auth_job` | 다음 거래일을 위한 KIS 토큰 강제 갱신 |
+- 부트스트랩과 예약은 같은 분봉 태스크를 공유해 시작 경로가 달라도 수집기가 중복되지 않게 한다. [소유권 검증](../tests/test_stage5.py)
+- 종료는 초기화·분봉 수집기·하위 worker를 정리한 뒤 KIS Queue를 닫아 취소 이후 요청 생성을 막는다. [앱 종료](../app/main.py)
+- 예약은 `Asia/Seoul`, `max_instances=1`, `coalesce=True`를 사용하며 실패한 분봉 루프를 자동 재시작하지 않는다. [예약 정책](../app/core/scheduler.py)
+- 일봉 증분은 최신 500봉 fingerprint가 일치할 때만 조기 종료해 최신 날짜만으로 내부 갭을 놓치지 않게 한다. [수집 근거](../app/tasks/daily_ohlcv_scheduler.py)
+- 최초·미검증·로컬 변경·부트스트랩은 깊은 검증을 수행하며, 500봉 미만의 이력은 빠른 증분 경로로 승격하지 않는다. [검증 사례](../tests/test_stage2.py)
+- 일봉 검증 예산이 부족하거나 수집 중 로컬 fingerprint가 바뀌면 이번 결과를 저장하지 않는다. [저장 경계](../app/tasks/daily_ohlcv_scheduler.py)
+- 확인한 일봉 응답 범위의 불필요한 로컬 행은 제거하되, 페이지 밖 원본 정정은 다음 깊은 검증까지 지연될 수 있다. [복구 범위](../app/tasks/daily_ohlcv_scheduler.py)
+- 분봉은 시간순 정규화와 상충 중복 검증 후 누적 차분을 계산하며, watermark와 같은 시각의 수정도 반영한다. [변환 계약](../app/tasks/minute_ohlcv_scheduler.py)
+- 부분 재수집의 대금은 OHLCV와 누적값이 모순 없을 때만 보존하고, 차분 근거가 없으면 `NULL`로 둔다. [정합성 검증](../tests/test_stage2.py)
+- 페이지 밖 후속 대금은 정확히 다음 분이고 두 누적값이 있을 때만 보정해 떨어진 봉을 인접 원본으로 추정하지 않는다. [보정 경계](../app/tasks/minute_ohlcv_scheduler.py)
+- 분봉 watermark는 OHLCV·MA 성공 후 전진하며, 저장 후 페이지·MA 실패는 미준비 상태로 남겨 재시도한다. [복구 계약](database.md)
+- 종목 처리당 일봉 최대 5요청·분봉 정규 worker 최대 15단계를 사용하고, 재시도는 각각 최대 5회·3회와 0.5초 재등록 대기를 유지한다. [일봉](../app/tasks/daily_ohlcv_scheduler.py), [분봉](../app/tasks/minute_ohlcv_scheduler.py)
+- 초기 DB 조회 오류는 전송 전에 중단하고, 재시도 후 종목 실패가 남으면 전체 작업도 실패로 전달한다. [실패 검증](../tests/test_stage5.py)
+- 2,400종목의 5요청·1요청 수집 간격 합계는 1,200초·240초이며, HTTP·DB·재시도를 제외한 산술값이다. [호출량 측정](benchmark.md#일봉-수집-비교)
+- GC는 종목별 일봉 500개·분봉 2개 저장 거래일을 보존하며, 전날 일봉 부재를 실제 휴장이나 수집 완전성의 증거로 보지 않는다. [GC 구현](../app/core/scheduler.py)
+- 예약 마스터·GC·정규 일봉 작업은 전체 API 가드와 체크포인트를 사용하고, MA 재구축은 별도 준비 상태로 관리한다. [가드 경계](architecture.md#checkpoints)
 
-## 부트스트랩
+# Diagrams
 
-`run_bootstrap_pipeline()`은 앱 시작 시 `SCHED=True`일 때 백그라운드로 실행된다. 현재 데이터 상태를 검사하고 필요한 마스터·일봉·분봉 준비 작업과 MA 재구축을 순차 실행한다.
+## 시작 경로와 공유 수집기 - 시퀀스 다이어그램
 
-`rebuild_ma_database()`는 다음을 수행한다.
+```mermaid
+sequenceDiagram
+    participant B as 부트스트랩
+    participant S as SystemScheduler
+    participant M as 공유 분봉 태스크
+    participant W as 수집 worker
+    B->>B: 마스터 확인 → 일봉 깊은 검증 → MA 재구축
+    B->>M: 시작 요청
+    M->>W: 단일 수집 루프
+    S->>M: 평일 08:55 시작 요청
+    M-->>S: 이미 실행 중이면 같은 태스크 반환
+    Note over S,W: 04:00 GC / 08:30 마스터 / 16:00 일봉 / 22:00 인증
+    loop 각 수집 사이클
+        W->>W: 종목별 수집·재시도·MA 갱신
+    end
+    alt 최종 실패가 남음
+        W-->>M: 예외
+        M-->>S: 예약 호출자에게 실패 전달
+    else 사이클 완료 후 15:55 이후
+        W-->>M: 정상 종료
+    end
+```
 
-1. 시스템 상태를 acquire해 `/health` 외 API를 차단한다.
-2. MA 계산기와 두 MA 테이블을 초기화한다.
-3. `daily_ohlcv`를 시간 오름차순으로 순회해 일봉 MA를 계산하고 종목당 최신 301개만 유지한다.
-4. 최근 3개 거래일의 `minute_ohlcv`로 분봉 MA를 계산하고 종목당 최신 391개만 유지한다.
-5. 연결을 닫고 시스템 상태를 복구한다.
+## MA 준비 상태 - 상태 다이어그램
 
-`SCHED=False`에서도 스크리너 사용을 위해 MA 재구축 태스크는 시작된다.
+```mermaid
+stateDiagram-v2
+    state "초기화 대기" as Pending
+    state "재구축 중" as Rebuilding
+    state "조회 가능" as Ready
+    state "미준비 / 실패" as Failed
+    [*] --> Pending
+    Pending --> Rebuilding: 정본에서 전체 재구축
+    Ready --> Rebuilding: 명시적 재구축
+    Failed --> Rebuilding: 전체 복구 시도
+    Rebuilding --> Ready: commit 성공 + 미복구 종목 없음
+    Rebuilding --> Failed: 오류 / 취소 / 새 종목 실패 잔존
+    Ready --> Failed: 종목 MA 또는 후속 페이지 실패
+    Failed --> Failed: 다른 종목 성공 / 일부 실패 잔존
+    Failed --> Ready: 초기화 완료 상태에서 실패 종목 모두 복구
+```
 
-빈 `trading.db`로 시작하면 마스터와 일봉을 먼저 복구하고 당시 존재하는 OHLCV로 MA 메모리 DB를 구성한다. 이후 분봉 수집기가 과거 페이지를 디스크에 채우며, 각 종목 수집이 끝날 때 해당 종목의 분봉 MA를 다시 구축한다. 따라서 콜드 스타트 완료에 별도 재시작은 필요하지 않다.
+# Tests
 
-## 일봉 수집
+[Stage 2](../tests/test_stage2.py)는 최초·증분·중복·과거 갭·부분 재수집을 독립 원본과 비교한다. [Stage 5](../tests/test_stage5.py)는 MA 실패 후 watermark 재시도, 재구축 중 새 실패 보존, 공유 분봉 태스크, 취소 후 하위 worker 종료, DB 조회 오류 전파와 GC 보존 범위를 확인한다.
 
-`app/tasks/daily_ohlcv_scheduler.py`는 종목별 기존 최신 날짜를 확인하고 KIS 일봉 API로 부족한 구간을 가져온다. 결과는 STRICT 스키마에 맞게 정수로 변환하고 bulk upsert한다.
-
-API 경계 누락을 방지하기 위해 기존 날짜와 겹치는 구간도 함께 upsert한다. 일봉 MA는 이 중복 입력을 상태형 계산기에 다시 누적하지 않고, upsert가 끝난 뒤 해당 종목의 canonical OHLCV 전체에서 재계산한다.
-
-- 전 종목을 하나의 DataFrame으로 만들지 않는다.
-- KIS 호출은 전역 큐를 사용한다.
-- 종목 단위 실패가 전체 프로세스를 즉시 중단하지 않도록 기록한다.
-- 완료 뒤 호출자가 디스크 정본의 WAL 체크포인트를 실행한다.
-
-## 분봉 수집
-
-`app/tasks/minute_ohlcv_scheduler.py`는 08:55부터 장중 수집을 수행한다. 종목별 분봉 응답의 누적 거래량·대금을 단위 캔들 값으로 변환해 저장하며, 같은 캔들의 갱신은 upsert한다.
-
-종목별 수집 페이지는 먼저 디스크 `minute_ohlcv`에 upsert한다. 해당 종목의 수집이 끝나면 디스크 정본에서 최신 590개 분봉을 전체 시간순으로 다시 읽어 MA를 계산하고, `minute_ma`에는 최신 391개 결과만 저장한다. 따라서 최신 페이지부터 과거로 내려가는 KIS 응답 순서가 콜드 스타트 MA 계산 순서에 영향을 주지 않는다. KIS 요청 순서는 전역 큐가 직렬화한다.
-
-OHLCV 쓰기가 실패하면 오류를 삼키지 않고 상위 워커로 전달해 최대 3회 재시도한다. MA 교체가 실패하면 트랜잭션을 롤백하고 해당 종목을 실패로 기록하므로 누락된 페이지를 정상 MA로 오인하지 않는다.
-
-## 지능형 GC
-
-GC는 전일 데이터가 존재하는지 먼저 확인하는 smart trigger를 사용한다. 실행할 필요가 있을 때 임시 테이블과 윈도 순위를 이용해 종목별 최신 거래 캔들만 보존한다.
-
-- 일봉: 종목별 최신 500개
-- 분봉: 종목별 최신 2개 거래일
-- 전 종목 Python 삭제 루프 대신 집합 기반 SQL 사용
-- 실행 중 `system_state.acquire()`로 일반 API 차단
-- 완료 후 디스크 정본의 WAL 체크포인트 실행
-
-## 변경 시 확인사항
-
-- 예약 시각이 장 운영 시간과 충돌하지 않는가
-- 동일 작업의 중복 실행이 차단되는가
-- 모든 KIS 호출이 큐를 통과하는가
-- 독립 SQLite 연결이 `finally`에서 닫히는가
-- 무거운 작업이 시스템 가드를 acquire하는가
-- 성공 뒤 필요한 WAL 체크포인트가 실행되는가
-- 1GB 환경에서 전 종목 데이터 복제본을 만들지 않는가
+실제 거래일 달력, 페이지 밖 수정주가, 장시간 인증·예약·수집 공존은 별도 검증 영역이다. 합성 테스트와 호출량 산술만으로 운영 완료 시각을 보장하지 않는다.

@@ -3,6 +3,8 @@ __pycache__/
 *$py.class
 .venv/
 .env
+kis_devlp.yaml
+KIS20*
 .git/
 .github/
 .vscode/

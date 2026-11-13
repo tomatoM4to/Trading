@@ -211,6 +211,7 @@ export function ScreenerBuilder() {
               market_cap: item.market_cap,
               close: item.close,
               amount: item.amount,
+              amount_asof: item.amount_asof,
               change_rate: item.change_rate,
               filter_values: item.filter_values || {}
             }));

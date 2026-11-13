@@ -45,7 +45,7 @@ def connect_sqlite() -> sqlite3.Connection:
         conn = sqlite3.connect(db_path, uri=True, check_same_thread=False)
     else:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn = sqlite3.connect(db_path, uri=True, check_same_thread=False)
         # WAL 모드는 동시 읽기/쓰기를 개선하지만, 파일 시스템에 따라 호환성 문제가 있을 수 있습니다.
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
@@ -93,6 +93,13 @@ def init_sqlite_connection() -> None:
         ) WITHOUT ROWID, STRICT
         """)
 
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_collection_state (
+            ticker TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL
+        ) WITHOUT ROWID, STRICT
+        """)
+
         # stock_codes 테이블
         conn.execute("""
         CREATE TABLE IF NOT EXISTS stock_codes (
@@ -126,9 +133,18 @@ def init_sqlite_connection() -> None:
             close INTEGER NOT NULL,
             volume INTEGER NOT NULL,
             amount INTEGER,
+            cumulative_amount INTEGER,
             PRIMARY KEY (ticker, date, time)
         ) WITHOUT ROWID, STRICT
         """)
+
+        minute_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(minute_ohlcv)")
+        }
+        if "cumulative_amount" not in minute_columns:
+            conn.execute(
+                "ALTER TABLE minute_ohlcv ADD COLUMN cumulative_amount INTEGER"
+            )
 
         conn.commit()
     finally:

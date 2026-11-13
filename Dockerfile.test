@@ -1,0 +1,9 @@
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-install-project
+COPY app ./app
+COPY tests ./tests
+COPY scripts ./scripts
+ENV PATH="/app/.venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+CMD ["python", "-m", "pytest", "-q", "--tb=short"]

@@ -7,6 +7,13 @@ from schemas.screener import FilterNode, ScreenerRequest
 class ScreenerEngine:
     VALID_MA_PERIODS = {"5", "10", "20", "60", "120", "200"}
 
+    def _require_ma_ready(self) -> None:
+        from core.state import system_state
+
+        ready, reason = system_state.ma_status
+        if not ready:
+            raise RuntimeError(reason)
+
     def _validate_ma_line(self, line: str) -> str:
         raw_line = str(line)
         if raw_line.startswith("ma_daily_"):
@@ -249,6 +256,7 @@ class ScreenerEngine:
                         else:
                             final_dict[ticker] = values
 
+            self._require_ma_ready()
             items = self.get_ticker_names(final_dict)
             yield f"data: {json.dumps({'type': 'complete', 'items': items})}\n\n"
         except Exception as e:
@@ -260,9 +268,32 @@ class ScreenerEngine:
         current_tickers: dict[str, dict[str, float]] | None = None,
     ) -> dict[str, dict[str, float]]:
         """단일 필터 모듈을 호출하여 딕셔너리를 반환합니다."""
+        self._require_ma_ready()
         handler = self.filter_handlers.get(filter_node.type)
         if not handler:
             raise ValueError(f"지원하지 않는 필터 타입입니다: {filter_node.type}")
+
+        from core.database import connect_sqlite
+
+        conn = connect_sqlite()
+        try:
+            eligible = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
+                )
+            }
+        finally:
+            conn.close()
+        current_tickers = (
+            {ticker: {} for ticker in eligible}
+            if current_tickers is None
+            else {
+                ticker: values
+                for ticker, values in current_tickers.items()
+                if ticker in eligible
+            }
+        )
         return await handler(filter_node.id, filter_node.params, current_tickers)
 
     def get_ticker_names(self, tickers: dict[str, dict[str, float]]) -> list:
@@ -283,7 +314,9 @@ class ScreenerEngine:
                 s.market,
                 s.market_cap,
                 (SELECT close FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as close,
-                (SELECT amount FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as amount,
+                (SELECT cumulative_amount FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as amount,
+                (SELECT printf('%04d-%02d-%02d %02d:%02d:%02d', date/10000, date/100%100, date%100, time/10000, time/100%100, time%100)
+                 FROM minute_ohlcv m WHERE m.ticker = s.ticker ORDER BY date DESC, time DESC LIMIT 1) as amount_asof,
                 (
                     SELECT d.close
                     FROM daily_ohlcv d
@@ -300,7 +333,16 @@ class ScreenerEngine:
 
             results = []
             for r in rows:
-                ticker_code, name, market, market_cap, close, amount, prev_close = r
+                (
+                    ticker_code,
+                    name,
+                    market,
+                    market_cap,
+                    close,
+                    amount,
+                    amount_asof,
+                    prev_close,
+                ) = r
 
                 change_rate = None
                 if close is not None and prev_close is not None and prev_close != 0:
@@ -314,6 +356,7 @@ class ScreenerEngine:
                         "market_cap": market_cap,
                         "close": close,
                         "amount": amount,
+                        "amount_asof": amount_asof,
                         "change_rate": change_rate,
                         "filter_values": tickers.get(ticker_code, {}),
                     }
@@ -331,7 +374,7 @@ class ScreenerEngine:
         self,
         filter_id: str,
         params: dict[str, Any],
-        current_tickers: dict[str, dict[str, float]] | None = None,
+        current_tickers: dict[str, dict[str, float]],
     ) -> dict[str, dict[str, float]]:
         """다중 이평선 정배열 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
@@ -351,15 +394,7 @@ class ScreenerEngine:
         min_func = f"MIN({', '.join(mapped)})"
         val_select = f"(({max_func} - {min_func}) * 100.0 / NULLIF({min_func}, 0)) as alignment_diff"
 
-        from core.database import connect_ma_db, connect_sqlite
-
-        if current_tickers is None:
-            conn = connect_sqlite()
-            rows = conn.execute(
-                "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
-            ).fetchall()
-            current_tickers = {r["ticker"]: {} for r in rows}
-            conn.close()
+        from core.database import connect_ma_db
 
         if not current_tickers:
             return {}
@@ -395,7 +430,7 @@ class ScreenerEngine:
         self,
         filter_id: str,
         params: dict[str, Any],
-        current_tickers: dict[str, dict[str, float]] | None = None,
+        current_tickers: dict[str, dict[str, float]],
     ) -> dict[str, dict[str, float]]:
         """이평선 크로스 판별 필터 (In-Memory MA 조회)"""
         short_line = params.get("short_line")
@@ -426,15 +461,7 @@ class ScreenerEngine:
                 f"((curr_{l_col} - curr_{s_col}) * 100.0 / NULLIF(curr_{s_col}, 0))"
             )
 
-        from core.database import connect_ma_db, connect_sqlite
-
-        if current_tickers is None:
-            conn = connect_sqlite()
-            rows = conn.execute(
-                "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
-            ).fetchall()
-            current_tickers = {r["ticker"]: {} for r in rows}
-            conn.close()
+        from core.database import connect_ma_db
 
         if not current_tickers:
             return {}
@@ -476,7 +503,7 @@ class ScreenerEngine:
         self,
         filter_id: str,
         params: dict[str, Any],
-        current_tickers: dict[str, dict[str, float]] | None = None,
+        current_tickers: dict[str, dict[str, float]],
     ) -> dict[str, dict[str, float]]:
         """수렴 횡보(상태 유지) 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
@@ -496,15 +523,7 @@ class ScreenerEngine:
         convergence_cond = f"( {diff_val} <= ? )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
-        from core.database import connect_ma_db, connect_sqlite
-
-        if current_tickers is None:
-            conn = connect_sqlite()
-            rows = conn.execute(
-                "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
-            ).fetchall()
-            current_tickers = {r["ticker"]: {} for r in rows}
-            conn.close()
+        from core.database import connect_ma_db
 
         if not current_tickers:
             return {}
@@ -539,7 +558,7 @@ class ScreenerEngine:
         self,
         filter_id: str,
         params: dict[str, Any],
-        current_tickers: dict[str, dict[str, float]] | None = None,
+        current_tickers: dict[str, dict[str, float]],
     ) -> dict[str, dict[str, float]]:
         """수렴 지점 발생 판별 필터 (In-Memory MA 조회)"""
         lines = params.get("lines", [])
@@ -559,15 +578,7 @@ class ScreenerEngine:
         convergence_cond = f"( {diff_val} <= ? )"
         trend_select = f"CASE WHEN {convergence_cond} THEN 1 ELSE 0 END as is_converged"
 
-        from core.database import connect_ma_db, connect_sqlite
-
-        if current_tickers is None:
-            conn = connect_sqlite()
-            rows = conn.execute(
-                "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
-            ).fetchall()
-            current_tickers = {r["ticker"]: {} for r in rows}
-            conn.close()
+        from core.database import connect_ma_db
 
         if not current_tickers:
             return {}
@@ -603,7 +614,7 @@ class ScreenerEngine:
         self,
         filter_id: str,
         params: dict[str, Any],
-        current_tickers: dict[str, dict[str, float]] | None = None,
+        current_tickers: dict[str, dict[str, float]],
     ) -> dict[str, dict[str, float]]:
         """이격도 판별 필터 (ATTACH DATABASE 활용)"""
         line = params.get("line")
@@ -630,22 +641,12 @@ class ScreenerEngine:
 
         from core.database import _MA_MEM_DB_URI, connect_sqlite
 
-        if current_tickers is None:
-            conn = connect_sqlite()
-            try:
-                rows = conn.execute(
-                    "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
-                ).fetchall()
-                current_tickers = {r["ticker"]: {} for r in rows}
-            finally:
-                conn.close()
-
         if not current_tickers:
             return {}
 
         conn = connect_sqlite()
         try:
-            conn.execute(f"ATTACH DATABASE '{_MA_MEM_DB_URI}' AS madb")
+            conn.execute("ATTACH DATABASE ? AS madb", (_MA_MEM_DB_URI,))
 
             placeholders = ", ".join("?" for _ in current_tickers.keys())
             query_params = [*current_tickers.keys(), threshold]
@@ -680,7 +681,7 @@ class ScreenerEngine:
         self,
         filter_id: str,
         params: dict[str, Any],
-        current_tickers: dict[str, dict[str, float]] | None = None,
+        current_tickers: dict[str, dict[str, float]],
     ) -> dict[str, dict[str, float]]:
         """최대 거래량 매물대 돌파 판별 필터"""
         lookback = params.get("lookback")
@@ -697,16 +698,6 @@ class ScreenerEngine:
         duration = {"1M": 30, "3M": 60, "2H": 120, "4H": 240}[lookback]
 
         from core.database import connect_sqlite
-
-        if current_tickers is None:
-            conn = connect_sqlite()
-            try:
-                rows = conn.execute(
-                    "SELECT ticker FROM stock_codes WHERE is_halted=0 AND is_admin_issue=0"
-                ).fetchall()
-                current_tickers = {r["ticker"]: {} for r in rows}
-            finally:
-                conn.close()
 
         if not current_tickers:
             return {}
@@ -783,32 +774,37 @@ class ScreenerEngine:
             priority=5,
         )
 
-        if res.is_ok():
-            body = res.get_body()
-            output = getattr(body, "output", []) or []
+        if not res.is_ok():
+            raise RuntimeError("KIS 투자자 랭킹 조회에 실패했습니다.")
 
-            for item in output:
-                ticker = item.get("mksc_shrn_iscd") or item.get("stck_shrn_iscd")
-                if ticker:
-                    tickers.append(ticker)
+        body = res.get_body()
+        output = body.get("output")
+        if not isinstance(output, list):
+            raise ValueError("KIS 투자자 랭킹 응답 형식이 올바르지 않습니다.")
 
-            unique_tickers = []
-            for t in tickers:
-                if t not in unique_tickers:
-                    unique_tickers.append(t)
+        for item in output:
+            if not isinstance(item, dict):
+                raise ValueError("KIS 투자자 랭킹 응답 행이 올바르지 않습니다.")
+            ticker = item.get("mksc_shrn_iscd") or item.get("stck_shrn_iscd")
+            if not isinstance(ticker, str) or not ticker.strip():
+                raise ValueError("KIS 투자자 랭킹 종목코드가 올바르지 않습니다.")
+            tickers.append(ticker)
 
-            # API 반환 순서대로 1.0, 2.0... 의 순위(Float)를 부여
-            return {
-                t: {filter_id: float(i + 1)}
-                for i, t in enumerate(unique_tickers[:limit])
-            }
-        return {}
+        unique_tickers = []
+        for t in tickers:
+            if t not in unique_tickers:
+                unique_tickers.append(t)
+
+        # API 반환 순서대로 1.0, 2.0... 의 순위(Float)를 부여
+        return {
+            t: {filter_id: float(i + 1)} for i, t in enumerate(unique_tickers[:limit])
+        }
 
     async def _handle_foreign_net_buy_rank(
         self,
         filter_id: str,
         params: dict[str, Any],
-        current_tickers: dict[str, dict[str, float]] | None = None,
+        current_tickers: dict[str, dict[str, float]],
     ) -> dict[str, dict[str, float]]:
         """외국인 순매수 상위 필터"""
         limit = params.get("limit", 30)
@@ -816,15 +812,13 @@ class ScreenerEngine:
         res = await self._fetch_investor_rank(
             etc_cls_code="1", filter_id=filter_id, limit=limit
         )
-        if current_tickers is not None:
-            return {t: res[t] for t in res if t in current_tickers}
-        return res
+        return {t: res[t] for t in res if t in current_tickers}
 
     async def _handle_inst_net_buy_rank(
         self,
         filter_id: str,
         params: dict[str, Any],
-        current_tickers: dict[str, dict[str, float]] | None = None,
+        current_tickers: dict[str, dict[str, float]],
     ) -> dict[str, dict[str, float]]:
         """기관 순매수 상위 필터"""
         limit = params.get("limit", 30)
@@ -832,9 +826,7 @@ class ScreenerEngine:
         res = await self._fetch_investor_rank(
             etc_cls_code="2", filter_id=filter_id, limit=limit
         )
-        if current_tickers is not None:
-            return {t: res[t] for t in res if t in current_tickers}
-        return res
+        return {t: res[t] for t in res if t in current_tickers}
 
 
 screener_engine = ScreenerEngine()

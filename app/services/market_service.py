@@ -43,7 +43,7 @@ async def get_top_volume_tickers(limit: int = 30) -> TopVolumeResponse:
             for r in rows
         ]
 
-        return TopVolumeResponse(date=latest_date, items=items)
+        return TopVolumeResponse(date=str(latest_date), items=items)
 
     finally:
         cursor.close()

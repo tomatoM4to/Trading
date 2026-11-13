@@ -45,7 +45,13 @@ class ScreenerResultItem(BaseModel):
     market: str | None = Field(default=None, description="시장 (KOSPI/KOSDAQ)")
     market_cap: float | None = Field(default=None, description="시가총액")
     close: float | None = Field(default=None, description="현재가")
-    amount: float | None = Field(default=None, description="당일 누적 거래대금")
+    amount: float | None = Field(
+        default=None,
+        description="최근 저장 분봉 거래일의 해당 시점까지 누적 거래대금. 원본 누적값이 없으면 null",
+    )
+    amount_asof: str | None = Field(
+        default=None, description="거래대금 기준 분봉 시각 (YYYY-MM-DD HH:MM:SS, KST)"
+    )
     change_rate: float | None = Field(default=None, description="전일 대비 등락률(%)")
     filter_values: dict[str, float] = Field(
         default_factory=dict, description="각 필터별 조건 부합 강도를 나타내는 추출 값"
