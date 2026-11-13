@@ -7,6 +7,7 @@
 
 # Engineering Boundaries
 - 개발 환경과 실행 명령은 `README.md`를 기준으로 확인한다.
+- KIS API 관련 정보는 KIS Code Assistant MCP(`kis_code_assistant`)를 조회하여 확인한다.
 - 코드는 간결하게 유지한다. 깊은 중첩보다 early return·`continue`를 우선한다.
 - 반복되거나 의미 있는 매직 넘버·문자열은 이름 있는 상수로 분리한다. 한 번 쓰는 자명한 값까지 추상화하지 않는다.
 - 요구사항, 공식 명세, 실제 코드와 측정 결과를 근거로 판단한다. 검증되지 않은 추정을 사실로 취급하지 않는다.
