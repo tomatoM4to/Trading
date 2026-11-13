@@ -146,5 +146,7 @@ Docker 환경을 준비하고, 설정 파일 생성 및 HTTPS 인증서 발급�
 - [Scheduler](docs/scheduler.md)
 - [Strategy & Screener](docs/screener.md)
 - [Benchmark](docs/benchmark.md)
+- [정합성 테스트 실행 및 결과](docs/testing.md)
+- [재현된 결함](docs/test-defects.md)
 
 개발 규칙과 검증 경계는 [AGENTS.md](AGENTS.md)를 참고합니다.

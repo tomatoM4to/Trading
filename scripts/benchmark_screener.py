@@ -1,378 +1,142 @@
 import argparse
-import csv
+import asyncio
 import json
+import sys
 import time
-from datetime import datetime
+from pathlib import Path
 
-import requests
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-SCENARIOS = [
-    {
-        "name": "Light 1 (Daily Cross)",
-        "payload": {
-            "filters": [
+
+async def benchmark(tickers, repeats):
+    from tests import support
+
+    box = support.Sandbox()
+    database = support.database
+
+    from core.bootstrap import rebuild_ma_database
+    from schemas.screener import ScreenerRequest
+    from services.screener_service import ScreenerEngine
+
+    from tests.data import daily_series, ma_reference, minute_series
+    from tests.run import peak_rss
+
+    start = time.perf_counter()
+    processed = 0
+    expected = {}
+    try:
+        for i in range(tickers):
+            ticker = f"{i:06}"
+            box.stock(ticker)
+            for minute in (False, True):
+                rows = (
+                    minute_series(590, ticker) if minute else daily_series(500, ticker)
+                )
+                ordered = []
+                for index, row in enumerate(rows):
+                    close = 100 + index if i % 2 == 0 else 1000 - index
+                    ordered.append(
+                        (
+                            *row[: 3 if minute else 2],
+                            close,
+                            close + 3,
+                            close - 3,
+                            close,
+                            row[-2],
+                            close * row[-2],
+                        )
+                    )
+                table, slots = (
+                    ("minute_ohlcv", "?,?,?,?,?,?,?,?,?")
+                    if minute
+                    else ("daily_ohlcv", "?,?,?,?,?,?,?,?")
+                )
+                box.write(f"INSERT INTO {table} VALUES ({slots})", ordered)
+                processed += len(ordered)
+                if minute and i % 2 == 0:
+                    values = ma_reference(ordered, minute=True)[-1]
+                    expected[ticker] = {
+                        "alignment": round((values[3] - values[5]) / values[5] * 100, 4)
+                    }
+        await rebuild_ma_database()
+        hydration_seconds = time.perf_counter() - start
+        engine = ScreenerEngine()
+        request = ScreenerRequest(
+            filters=[
                 {
-                    "id": "f1",
-                    "type": "ma_cross",
-                    "params": {
-                        "short_line": "ma_daily_5",
-                        "long_line": "ma_daily_20",
-                        "direction": "golden",
-                        "within": 1,
-                    },
+                    "id": "alignment",
+                    "type": "ma_alignment",
+                    "params": {"lines": ["ma5", "ma20"], "duration": 1},
                 }
             ],
-            "operations": [],
-        },
-    },
-    {
-        "name": "Light 2 (Minute Cross)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "f2",
-                    "type": "ma_cross",
-                    "params": {
-                        "short_line": "ma5",
-                        "long_line": "ma20",
-                        "direction": "golden",
-                        "within": 1,
-                    },
-                }
-            ],
-            "operations": [],
-        },
-    },
-    {
-        "name": "Light 3 (Daily Alignment)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "f3",
-                    "type": "ma_alignment",
-                    "params": {
-                        "lines": ["ma_daily_5", "ma_daily_20", "ma_daily_60"],
-                        "duration": 2,
-                    },
-                }
-            ],
-            "operations": [],
-        },
-    },
-    {
-        "name": "Light 4 (Minute Convergence Point)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "f4",
-                    "type": "ma_convergence_point",
-                    "params": {"lines": ["ma5", "ma20"], "threshold": 3.0, "within": 1},
-                }
-            ],
-            "operations": [],
-        },
-    },
-    {
-        "name": "Light 5 (Daily Alignment + Foreign Buy Rank)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "f5a",
-                    "type": "ma_alignment",
-                    "params": {"lines": ["ma_daily_5", "ma_daily_20"], "duration": 1},
-                },
-                {"id": "f5b", "type": "foreign_net_buy_rank", "params": {"limit": 30}},
-            ],
-            "operations": ["AND"],
-        },
-    },
-    {
-        "name": "Heavy 1 (Daily Deep Window)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "h1a",
-                    "type": "ma_alignment",
-                    "params": {
-                        "lines": [
-                            "ma_daily_5",
-                            "ma_daily_10",
-                            "ma_daily_20",
-                            "ma_daily_60",
-                            "ma_daily_120",
-                        ],
-                        "duration": 5,
-                    },
-                },
-                {
-                    "id": "h1b",
-                    "type": "ma_convergence_consolidation",
-                    "params": {
-                        "lines": ["ma_daily_20", "ma_daily_60"],
-                        "threshold": 2.0,
-                        "duration": 5,
-                    },
-                },
-                {
-                    "id": "h1c",
-                    "type": "ma_cross",
-                    "params": {
-                        "short_line": "ma_daily_5",
-                        "long_line": "ma_daily_20",
-                        "direction": "golden",
-                        "within": 3,
-                    },
-                },
-                {"id": "h1d", "type": "foreign_net_buy_rank", "params": {"limit": 30}},
-                {"id": "h1e", "type": "inst_net_buy_rank", "params": {"limit": 30}},
-            ],
-            "operations": ["AND", "AND", "AND", "AND"],
-        },
-    },
-    {
-        "name": "Heavy 2 (Minute Stress Test)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "h2a",
-                    "type": "ma_alignment",
-                    "params": {
-                        "lines": ["ma5", "ma10", "ma20", "ma60", "ma120"],
-                        "duration": 10,
-                    },
-                },
-                {
-                    "id": "h2b",
-                    "type": "ma_convergence_consolidation",
-                    "params": {
-                        "lines": ["ma20", "ma60"],
-                        "threshold": 1.5,
-                        "duration": 10,
-                    },
-                },
-                {
-                    "id": "h2c",
-                    "type": "ma_cross",
-                    "params": {
-                        "short_line": "ma5",
-                        "long_line": "ma20",
-                        "direction": "golden",
-                        "within": 5,
-                    },
-                },
-                {"id": "h2d", "type": "foreign_net_buy_rank", "params": {"limit": 30}},
-                {"id": "h2e", "type": "inst_net_buy_rank", "params": {"limit": 30}},
-            ],
-            "operations": ["AND", "AND", "AND", "AND"],
-        },
-    },
-    {
-        "name": "Heavy 3 (Mixed Timeframes Combo)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "h3a",
-                    "type": "ma_alignment",
-                    "params": {
-                        "lines": ["ma_daily_20", "ma_daily_60", "ma_daily_120"],
-                        "duration": 5,
-                    },
-                },
-                {
-                    "id": "h3b",
-                    "type": "ma_alignment",
-                    "params": {"lines": ["ma5", "ma10", "ma20"], "duration": 5},
-                },
-                {
-                    "id": "h3c",
-                    "type": "ma_convergence_point",
-                    "params": {
-                        "lines": ["ma20", "ma60"],
-                        "threshold": 1.0,
-                        "within": 3,
-                    },
-                },
-                {
-                    "id": "h3d",
-                    "type": "ma_cross",
-                    "params": {
-                        "short_line": "ma5",
-                        "long_line": "ma20",
-                        "direction": "golden",
-                        "within": 1,
-                    },
-                },
-                {"id": "h3e", "type": "foreign_net_buy_rank", "params": {"limit": 30}},
-            ],
-            "operations": ["AND", "AND", "AND", "AND"],
-        },
-    },
-    {
-        "name": "Heavy 4 (Extreme Window Functions)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "h4a",
-                    "type": "ma_alignment",
-                    "params": {
-                        "lines": [
-                            "ma_daily_5",
-                            "ma_daily_10",
-                            "ma_daily_20",
-                            "ma_daily_60",
-                            "ma_daily_120",
-                        ],
-                        "duration": 15,
-                    },
-                },
-                {
-                    "id": "h4b",
-                    "type": "ma_convergence_consolidation",
-                    "params": {
-                        "lines": ["ma_daily_5", "ma_daily_10", "ma_daily_20"],
-                        "threshold": 5.0,
-                        "duration": 15,
-                    },
-                },
-                {
-                    "id": "h4c",
-                    "type": "ma_cross",
-                    "params": {
-                        "short_line": "ma_daily_5",
-                        "long_line": "ma_daily_60",
-                        "direction": "golden",
-                        "within": 10,
-                    },
-                },
-                {
-                    "id": "h4d",
-                    "type": "ma_cross",
-                    "params": {
-                        "short_line": "ma5",
-                        "long_line": "ma60",
-                        "direction": "golden",
-                        "within": 10,
-                    },
-                },
-                {"id": "h4e", "type": "foreign_net_buy_rank", "params": {"limit": 30}},
-            ],
-            "operations": ["AND", "AND", "AND", "AND"],
-        },
-    },
-    {
-        "name": "Heavy 5 (Full Minute DB Scan)",
-        "payload": {
-            "filters": [
-                {
-                    "id": "h5a",
-                    "type": "ma_alignment",
-                    "params": {
-                        "lines": ["ma10", "ma20", "ma60", "ma120"],
-                        "duration": 15,
-                    },
-                },
-                {
-                    "id": "h5b",
-                    "type": "ma_convergence_consolidation",
-                    "params": {
-                        "lines": ["ma5", "ma10", "ma20", "ma60", "ma120"],
-                        "threshold": 3.0,
-                        "duration": 10,
-                    },
-                },
-                {
-                    "id": "h5c",
-                    "type": "ma_cross",
-                    "params": {
-                        "short_line": "ma5",
-                        "long_line": "ma120",
-                        "direction": "golden",
-                        "within": 10,
-                    },
-                },
-                {"id": "h5d", "type": "foreign_net_buy_rank", "params": {"limit": 30}},
-                {"id": "h5e", "type": "inst_net_buy_rank", "params": {"limit": 30}},
-            ],
-            "operations": ["AND", "AND", "AND", "AND"],
-        },
-    },
-]
-
-
-def run_benchmark(host: str):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_filename = f"screener_benchmark_{timestamp}.csv"
-
-    print(f"Starting Screener Benchmark against {host}")
-    print(f"Results will be saved to {csv_filename}\n")
-
-    results = []
-
-    for i, scenario in enumerate(SCENARIOS, 1):
-        name = scenario["name"]
-        payload = scenario["payload"]
-
-        print(f"[{i}/{len(SCENARIOS)}] Running: {name} ... ", end="", flush=True)
-
-        start_time = time.perf_counter()
-
-        tickers_found = 0
-        status = "Success"
-
-        try:
-            with requests.post(
-                f"{host}/api/screener/run", json=payload, stream=True, timeout=120
-            ) as response:
-                response.raise_for_status()
-                for line in response.iter_lines():
-                    if line:
-                        decoded = line.decode("utf-8")
-                        if decoded.startswith("data: "):
-                            try:
-                                data = json.loads(decoded[6:])
-                                if data.get("type") == "complete":
-                                    items = data.get("items", [])
-                                    tickers_found = len(items)
-                                    break
-                            except json.JSONDecodeError:
-                                pass
-        except requests.exceptions.RequestException as e:
-            status = f"Error: {e}"
-        except Exception as e:
-            status = f"Error: {e}"
-
-        duration = time.perf_counter() - start_time
-
-        if status == "Success":
-            print(f"Done in {duration:.2f}s ({tickers_found} tickers found)")
-        else:
-            print(f"FAILED in {duration:.2f}s ({status})")
-
-        results.append(
-            {
-                "Scenario Name": name,
-                "Duration (s)": round(duration, 3),
-                "Tickers Found": tickers_found,
-                "Status": status,
+            operations=[],
+        )
+        runs = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            events = [
+                json.loads(event.removeprefix("data: "))
+                async for event in engine.run_pipeline_stream(request)
+            ]
+            elapsed = time.perf_counter() - started
+            terminals = [e for e in events if e["type"] in {"error", "complete"}]
+            if len(terminals) != 1 or terminals[0]["type"] != "complete":
+                raise AssertionError("Benchmark stream did not complete successfully")
+            actual = {
+                item["ticker"]: item["filter_values"] for item in terminals[0]["items"]
             }
-        )
+            if not expected or actual != expected:
+                raise AssertionError(
+                    "Benchmark result differs from independently calculated nonempty reference"
+                )
+            runs.append(
+                {
+                    "seconds": round(elapsed, 6),
+                    "matched": len(actual),
+                    "success": 1,
+                    "failure": 0,
+                }
+            )
+        conn = database.connect_ma_db()
+        try:
+            retained = {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("daily_ma", "minute_ma")
+            }
+        finally:
+            conn.close()
+        return {
+            "mode": "offline-synthetic",
+            "tickers": tickers,
+            "processed_records": processed,
+            "retained_ma": retained,
+            "hydration_seconds": round(hydration_seconds, 6),
+            "peak_rss_bytes": peak_rss(),
+            "rss_scope": "Python benchmark process; excludes OS page cache",
+            "runs": runs,
+        }
+    finally:
+        box.close()
 
-    print(f"\nWriting results to {csv_filename} ...")
-    with open(csv_filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=["Scenario Name", "Duration (s)", "Tickers Found", "Status"]
-        )
-        writer.writeheader()
-        writer.writerows(results)
 
-    print("Benchmark completed successfully.")
+def main():
+    parser = argparse.ArgumentParser(
+        description="Offline correctness-gated screener benchmark; never contacts a server"
+    )
+    parser.add_argument("--tickers", type=int, default=64)
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--report", type=Path)
+    args = parser.parse_args()
+    if not 2 <= args.tickers <= 2400 or not 1 <= args.repeats <= 20:
+        parser.error("tickers must be 2..2400 and repeats 1..20")
+    result = asyncio.run(benchmark(args.tickers, args.repeats))
+    text = json.dumps(result, indent=2)
+    print(text)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(text + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Screener Benchmark")
-    parser.add_argument(
-        "--host", type=str, default="http://127.0.0.1:8000", help="Target server host"
-    )
-    args = parser.parse_args()
-
-    run_benchmark(args.host)
+    main()

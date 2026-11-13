@@ -1,0 +1,26 @@
+{
+  "daily": [
+    {"stck_bsop_date":"20261112","stck_oprc":"116","stck_hgpr":"123","stck_lwpr":"110","stck_clpr":"120","acml_vol":"10","acml_tr_pbmn":"1122"},
+    {"stck_bsop_date":"20261111","stck_oprc":"113","stck_hgpr":"119","stck_lwpr":"111","stck_clpr":"115","acml_vol":"3","acml_tr_pbmn":"345"},
+    {"stck_bsop_date":"20261110","stck_oprc":"101","stck_hgpr":"120","stck_lwpr":"101","stck_clpr":"110","acml_vol":"2","acml_tr_pbmn":"211"},
+    {"stck_bsop_date":"20261109","stck_oprc":"100","stck_hgpr":"100","stck_lwpr":"100","stck_clpr":"100","acml_vol":"1","acml_tr_pbmn":"100"}
+  ],
+  "daily_expected": [
+    ["A",20261109,100,100,100,100,1,100],
+    ["A",20261110,101,120,101,110,2,211],
+    ["A",20261111,113,119,111,115,3,345],
+    ["A",20261112,116,123,110,120,10,1122]
+  ],
+  "minute": [
+    {"stck_bsop_date":"20261112","stck_cntg_hour":"090300","stck_oprc":"116","stck_hgpr":"123","stck_lwpr":"110","stck_prpr":"120","cntg_vol":"4","acml_tr_pbmn":"1122"},
+    {"stck_bsop_date":"20261112","stck_cntg_hour":"090200","stck_oprc":"113","stck_hgpr":"119","stck_lwpr":"111","stck_prpr":"115","cntg_vol":"3","acml_tr_pbmn":"656"},
+    {"stck_bsop_date":"20261112","stck_cntg_hour":"090100","stck_oprc":"101","stck_hgpr":"120","stck_lwpr":"101","stck_prpr":"110","cntg_vol":"2","acml_tr_pbmn":"311"},
+    {"stck_bsop_date":"20261112","stck_cntg_hour":"090000","stck_oprc":"100","stck_hgpr":"100","stck_lwpr":"100","stck_prpr":"100","cntg_vol":"1","acml_tr_pbmn":"100"}
+  ],
+  "minute_expected": [
+    ["A",20261112,90000,100,100,100,100,1,100],
+    ["A",20261112,90100,101,120,101,110,2,211],
+    ["A",20261112,90200,113,119,111,115,3,345],
+    ["A",20261112,90300,116,123,110,120,4,466]
+  ]
+}

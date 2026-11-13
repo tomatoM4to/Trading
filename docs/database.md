@@ -73,6 +73,8 @@ FastAPI 요청에서는 `get_db()`와 `get_ma_db()` dependency가 같은 원칙�
 
 `test_mem_var`는 테스트 전용 메모리 URI를 우선 적용한다. 동적 메모리 테스트에서는 별도 keep-alive 연결이 필요하다.
 
+`test_db_var`와 `test_mem_var`는 MA URI를 변경하지 않는다. 공개 관리자 검증 기능의 ContextVar만으로 MA까지 격리된다고 가정하면 안 된다. 새 자동 하네스는 [testing.md](testing.md)처럼 고유 MA URI·keepalive·연결 대상 검사까지 별도로 적용한다. Windows 디스크 연결에서 MA URI ATTACH가 파일로 해석되는 문제는 [T12](test-defects.md#t12--windows-디스크-정본에서-ma-uri-attach가-파일로-해석됨)에 재현 조건을 기록했다.
+
 ## 쿼리 원칙
 
 - 값은 `?` placeholder로 바인딩한다.

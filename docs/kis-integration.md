@@ -34,7 +34,9 @@ KIS 통합은 `app/core/kis_auth.py`의 인증과 `app/core/kis_fetch.py`의 데
 - 시작: FastAPI lifespan의 `start_q_worker()`
 - 지연 시작: 큐가 없는 상태에서 `async_kis_fetch()`가 호출돼도 자동 시작
 - 종료: lifespan의 `stop_q_worker()`가 태스크를 cancel하고 종료를 기다림
-- 종료 후 큐와 워커 참조를 함께 초기화하므로 같은 프로세스에서도 안전하게 다시 시작할 수 있음
+- 종료 후 큐와 워커 참조를 함께 초기화하며 idle 상태의 재시작은 테스트에서 통과함
+
+전송 중 종료·재시작은 idle 재시작과 다르다. 실행 중 `to_thread` 전송의 중첩과 응답 Future 미완료를 [Stage 3](testing.md)에서 재현했다. 현재 구현의 안전성 한계는 [T06–T08](test-defects.md#t06--queue-대기-중-취소한-요청도-전송)을 따른다.
 
 ## 응답 래퍼
 

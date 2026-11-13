@@ -1,48 +1,25 @@
-# 스크리너 벤치마크 및 부하 테스트 (Screener Benchmark)
+# 스크리너 벤치마크
 
-## 1. 개요
-`scripts/benchmark_screener.py` 스크립트는 Trading Server의 핵심인 **스크리너 엔진(Screener Engine)**의 실시간 성능과 부하 처리 능력을 측정하기 위해 작성되었습니다.
+## 현재 측정기
 
-본 벤치마크는 2,400개 전 종목을 대상으로 복잡한 SQLite Push-down 윈도우 함수 쿼리(이평선 정배열, 크로스, 밀집 등)가 디스크 I/O 및 1GB RAM 환경(Oracle Cloud)에서 어느 정도의 지연 시간(Latency)을 발생시키는지 추적합니다.
+`scripts/benchmark_screener.py`는 격리된 디스크 SQLite와 고유 MA 메모리 DB에서 고정 합성 데이터를 생성한다. 원격 서버와 KIS API를 호출하지 않는다. 이전 HTTP 측정기의 error/미완료 SSE를 Success로 기록할 수 있는 판정과 독립 기대값 부재를 제거했다. 기존 `--host` 옵션은 폐기했다.
 
-## 2. 벤치마크 시나리오 구성
-벤치마크는 크게 가벼운 단일 연산(Light)과 극단적인 다중 조건(Heavy) 그룹으로 나뉩니다.
-
-### ☀️ Light Scenarios (단일/단순 필터)
-1. **Light 1 (Daily Cross)**: 일봉 기준 단기/장기 이평선 크로스 단일 검사 (`ma_daily_5` 상향 돌파 `ma_daily_20`).
-2. **Light 2 (Minute Cross)**: 분봉 기준 단기/장기 이평선 크로스 단일 검사.
-3. **Light 3 (Daily Alignment)**: 3개 일봉 이평선(`ma_daily_5, 20, 60`)의 정배열 상태 유지 검사.
-4. **Light 4 (Minute Convergence Point)**: 분봉 기준 2개 이평선의 단기 밀집 지점 발생 여부 검사.
-5. **Light 5 (Daily Alignment + Foreign Buy Rank)**: 정배열 검사와 KIS 외부 수급 API(외국인 순매수 상위)를 `AND` 연산으로 조합.
-
-### ⛈️ Heavy Scenarios (극한 스트레스 테스트)
-1. **Heavy 1 (Daily Deep Window)**: 5개 이평선 정배열 + 수렴 횡보 + 크로스 + 외부 수급(외인/기관)을 동시에 만족하는 종목 찾기.
-2. **Heavy 2 (Minute Stress Test)**: 분봉 데이터(약 460만 건)를 대상으로 5개 이평선 정배열 및 밀집 등을 장기간(10 캔들 이상) 추적.
-3. **Heavy 3 (Mixed Timeframes Combo)**: 일봉과 분봉 쿼리를 하나의 파이프라인에서 섞어서 교집합(`AND`) 처리 시의 성능 측정.
-4. **Heavy 4 (Extreme Window Functions)**: 다수의 이평선과 긴 탐색 기간(`duration: 15`)을 주입하여 SQLite 임시 테이블 생성 및 정렬 오버헤드 극대화.
-5. **Heavy 5 (Full Minute DB Scan)**: 전체 분봉 DB에 대해 가능한 모든 무거운 연산을 동시에 쏟아붓는 최고 부하 테스트.
-
-## 3. 실행 방법
-
-벤치마크 스크립트는 `uv` 환경 또는 파이썬 가상환경에서 `requests` 라이브러리를 통해 동작합니다.
-스크리너 API가 SSE(Server-Sent Events) 스트림으로 동작하므로 스크립트는 스트림을 구독하여 `{"type": "complete"}` 이벤트가 도착할 때까지의 소요 시간을 측정합니다.
-
-```bash
-# 기본 실행 (운영 서버 타겟: https://168.107.55.31.nip.io)
-uv run python scripts/benchmark_screener.py
-
-# 로컬 개발 환경 타겟 실행
-uv run python scripts/benchmark_screener.py --host http://localhost:8000
+```powershell
+uv run --locked python scripts/benchmark_screener.py --tickers 64 --repeats 3
 ```
 
-## 4. 벤치마크 결과 및 로그 분석
+일봉 500개·분봉 590개를 종목별로 적재하고 실제 부트스트랩 MA 재구축을 실행한다. 종목의 절반은 상승, 절반은 하락 시계열이다. 실제 스크리너 SSE가 단 하나의 complete로 끝나고, 모든 기대 종목과 필터 값이 독립 산술 기준에 일치해야 시간과 성공을 기록한다. 오류·미완료·잘못된 빈 결과는 측정 실패다. 정확성 하네스와 별도 명령으로 유지하며, 전 종목 시계열을 하나의 DataFrame으로 복제하지 않는다.
 
-실행이 완료되면 루트 디렉토리에 `screener_benchmark_YYYYMMDD_HHMMSS.csv` 형태로 결과가 저장됩니다. CSV 파일에는 시나리오명, 소요 시간(초), 검색된 종목 수(Tickers Found), 성공/실패 여부가 기록됩니다.
+`--tickers` 범위는 2..2400, `--repeats`는 1..20이다. 기본 64종목 측정을 운영 전체 규모의 성능으로 일반화하면 안 된다. 로그에는 처리 레코드, MA 보존 행, 준비 시간, 반복별 시간/성공·실패·검색 수, Python 프로세스 peak RSS가 포함된다. 준비 시간은 Fixture 생성·저장·MA 재구축 전체이고, RSS는 OS page cache를 제외한 프로세스 최고치다.
 
-### 주요 결과 해석
-- **0.1초 미만의 비정상적인 종료**: 잘못된 쿼리로 인해 결과가 즉시 빈 값으로 반환된 과거 short-circuit 사례일 수 있습니다. 현재 입력 계약은 [`screener.md`](screener.md)를 따릅니다.
-- **정상적인 연산 소요 시간**: SQLite의 풀스캔 및 윈도우 함수 처리로 인해 시나리오의 무거움에 따라 수 초에서 ~30초 가량이 정상적인 소요 시간입니다.
-- **최적화 지표 (In-Memory 도입 완료)**: 물리 디스크 I/O 병목을 줄이기 위해 `file::memory:?cache=shared` 기반 주 DB를 사용합니다. 현재 구조는 [`database.md`](database.md)를 참고합니다.
+2026-11-13 Windows / Python 3.12.12 / SQLite 3.50.4 단일 실행: 64종목, 69,760 OHLCV행, daily_ma 19,264행, minute_ma 25,024행. 준비 1.543초, 3회 조회 0.0251..0.0262초, 매회 32종목과 전체 필터 값 일치, peak RSS 약 93.9MiB. CPU/메모리 제한이 없는 로컬 단기 측정이며 Linux 1 OCPU/1GB 결과가 아니다. 결과 JSON은 사용자 요청으로 제거하고 측정 조건과 요약만 보존했다.
+
+이번 환경에서는 Docker 엔진 접근이 거부돼 제한 컨테이너를 실행하지 못했다. 장시간 RSS·2400종목·heavy query 중 응답성은 [미검증 범위](testing.md#실행-결과와-한계)에 기록했다. HTTP·외부 수급을 포함한 과거 CSV와 현재 합성 로컬 결과는 동일 입력/환경이 아니므로 속도 회귀 비교에 직접 사용하지 않는다.
+
+## 과거 기록 보존
+
+아래 내용과 CSV는 과거 구조·데이터·서버에서 얻은 실험 기록이다. 당시의 성공 판정/결함이 포함될 수 있으며 현재 품질이나 성능의 보증이 아니다. 현재 구조는 [database.md](database.md), 새 검증 근거는 [testing.md](testing.md)를 따른다.
+
 
 ## 5. 벤치마크 결과 히스토리
 서버(Oracle Cloud 1GB RAM)와 로컬 환경에서 점진적인 아키텍처 최적화를 수행하며 측정한 결과들입니다.

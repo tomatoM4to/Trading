@@ -84,22 +84,13 @@ npx tsc --noEmit
 npm run build
 ```
 
-표준 `unittest` 기반 회귀 테스트는 다음 명령으로 실행한다.
+표준 `unittest` 기반 백엔드 정합성 하네스는 다음 명령으로 실행한다.
 
 ```powershell
-uv run python -m unittest discover -s tests -v
+uv run --locked python -m tests.run
 ```
 
-다음 영역은 추가 테스트 대상으로 본다.
-
-- 스크리너 입력 검증과 AND/OR 의미론
-- 일봉/분봉 테이블 선택
-- SystemState 중첩 acquire/release
-- ContextVar DB 격리
-- STRICT 날짜·시간 변환
-- KIS 큐 우선순위와 호출 간격
-- 차트 캔들·MA 집계
-- 역순 API 페이지를 포함한 콜드 스타트 분봉 MA 시간 순서와 보존 경계
+Stage별 명령·실행 결과·실제 API 선택 검증 및 미검증 범위는 [testing.md](testing.md)를 따른다. 발견한 결함은 실패 테스트로 보존하므로 현재 기본 실행은 종료 코드 1이다. [test-defects.md](test-defects.md)의 재현된 실패를 숨기려고 운영 코드를 수정하거나 skip하지 않는다.
 
 ## 장애 점검 순서
 
@@ -116,4 +107,4 @@ uv run python -m unittest discover -s tests -v
 - API 문서가 인증 없이 노출된다.
 - 배포 전에 자동 품질 게이트가 없다.
 - Compose 배포가 컨테이너를 먼저 내리므로 중단 시간이 있다.
-- AST AND/OR 의미론과 수집 파이프라인 전반의 자동 회귀 테스트가 부족하다.
+- 새 정합성 하네스에서 수집·Queue·최적화·복구 결함이 재현됐다. 수정과 운영 환경 재검증은 별도 작업이다.

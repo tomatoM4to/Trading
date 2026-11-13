@@ -14,6 +14,8 @@
 | [environment.md](environment.md) | 설정 파일과 로컬 실행 | `.env`, `kis_devlp.yaml`, `pyproject.toml` |
 | [deployment.md](deployment.md) | 이미지 빌드, 배포, Nginx, SSL | `Dockerfile`, `docker-compose.yml`, `.github/workflows/` |
 | [operations.md](operations.md) | 상태 확인, 수동 작업, 검증과 알려진 위험 | `/health`, `/admin/*` |
+| [testing.md](testing.md) | 단계별 오프라인 하네스, 격리, 실행 결과와 미검증 경계 | `tests/` |
+| [test-defects.md](test-defects.md) | 재현된 정합성·수명주기 결함과 최소 재현 | `tests/test_stage*.py` |
 
 ## 문서 사용 원칙
 
